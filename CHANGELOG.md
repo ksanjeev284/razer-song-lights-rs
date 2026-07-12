@@ -1,11 +1,16 @@
 # Changelog
 
+## [0.8.3] — 2026-07-12
+
+### Fixes
+- **macOS compile**: audio worker thread owns rodio `OutputStream` (not `Send` on CoreAudio); public `AudioPlayer` is fully `Send`/`Sync`
+- Windows + Ubuntu + macOS CI and release binaries should all go green
+
 ## [0.8.2] — 2026-07-12
 
 ### Fixes
-- **macOS build**: no longer move audio/`ShowHandle` across threads (cpal CoreAudio is not `Send`)
 - Fade/crossfade deferred drop stays on the GUI thread
-- Remaining Clippy nits for CI green on Win/Linux/macOS
+- Remaining Clippy nits for CI green on Win/Linux
 
 ## [0.8.1] — 2026-07-12
 
