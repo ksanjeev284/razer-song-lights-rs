@@ -53,6 +53,56 @@ impl LightTheme {
     }
 }
 
+/// Ambient keyboard effect between lyric hits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum AmbientEffect {
+    #[default]
+    Pulse,
+    Wave,
+    Breath,
+    Ripple,
+    Off,
+}
+
+impl AmbientEffect {
+    pub const ALL: [AmbientEffect; 5] = [
+        AmbientEffect::Pulse,
+        AmbientEffect::Wave,
+        AmbientEffect::Breath,
+        AmbientEffect::Ripple,
+        AmbientEffect::Off,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            AmbientEffect::Pulse => "Pulse",
+            AmbientEffect::Wave => "Wave",
+            AmbientEffect::Breath => "Breath",
+            AmbientEffect::Ripple => "Ripple",
+            AmbientEffect::Off => "Off",
+        }
+    }
+
+    pub fn from_index(i: u8) -> Self {
+        Self::ALL
+            .get(i as usize % Self::ALL.len())
+            .copied()
+            .unwrap_or(AmbientEffect::Pulse)
+    }
+
+    pub fn index(self) -> u8 {
+        Self::ALL.iter().position(|t| *t == self).unwrap_or(0) as u8
+    }
+
+    pub fn cycle(self) -> Self {
+        Self::from_index(self.index().wrapping_add(1))
+    }
+
+    pub fn is_on(self) -> bool {
+        !matches!(self, AmbientEffect::Off)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum RepeatMode {
     #[default]
@@ -173,5 +223,12 @@ mod tests {
         assert_eq!(RepeatMode::Off.cycle(), RepeatMode::One);
         assert_eq!(RepeatMode::One.cycle(), RepeatMode::All);
         assert_eq!(RepeatMode::All.cycle(), RepeatMode::Off);
+    }
+
+    #[test]
+    fn ambient_effect_cycles() {
+        assert_eq!(AmbientEffect::Pulse.cycle(), AmbientEffect::Wave);
+        assert!(!AmbientEffect::Off.is_on());
+        assert!(AmbientEffect::Breath.is_on());
     }
 }

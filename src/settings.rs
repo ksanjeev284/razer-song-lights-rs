@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use crate::cache::default_cache_root;
 use crate::show::PlayMode;
-use crate::themes::{LightTheme, RepeatMode};
+use crate::themes::{AmbientEffect, LightTheme, RepeatMode};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
@@ -34,6 +34,26 @@ pub struct AppSettings {
     pub mini_player: bool,
     #[serde(default)]
     pub recent_urls: Vec<String>,
+    #[serde(default = "default_true")]
+    pub ambient_pulse: bool,
+    #[serde(default = "default_true")]
+    pub resume_position: bool,
+    #[serde(default = "default_true")]
+    pub remember_offset: bool,
+    #[serde(default)]
+    pub crossfade_next: bool,
+    #[serde(default)]
+    pub night_dim: bool,
+    #[serde(default)]
+    pub ambient_effect: AmbientEffect,
+    #[serde(default = "default_true")]
+    pub sleep_fade: bool,
+    #[serde(default)]
+    pub seek_snap: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for AppSettings {
@@ -56,6 +76,14 @@ impl Default for AppSettings {
             always_on_top: false,
             mini_player: false,
             recent_urls: Vec::new(),
+            ambient_pulse: true,
+            resume_position: true,
+            remember_offset: true,
+            crossfade_next: false,
+            night_dim: false,
+            ambient_effect: AmbientEffect::Pulse,
+            sleep_fade: true,
+            seek_snap: false,
         }
     }
 }

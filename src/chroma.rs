@@ -97,6 +97,83 @@ impl ChromaKeyboard {
         self.flash_text(text, color);
         self.push()
     }
+
+    fn dim_color(c: u32, f: f32) -> u32 {
+        let f = f.clamp(0.0, 1.0);
+        let r = ((c & 0xFF) as f32 * f) as u32;
+        let g = (((c >> 8) & 0xFF) as f32 * f) as u32;
+        let b = (((c >> 16) & 0xFF) as f32 * f) as u32;
+        (b << 16) | (g << 8) | r
+    }
+
+    /// Soft ambient wash across a band of keys (between lyric events).
+    pub fn ambient_pulse(&mut self, phase: f64, color: u32, strength: f32) -> Result<(), ChromaError> {
+        self.clear(0);
+        let s = strength.clamp(0.05, 1.0);
+        let col = ((phase * MAX_COL as f64) as usize) % MAX_COL;
+        for r in 0..MAX_ROW {
+            for c in 0..MAX_COL {
+                let dist = (c as i32 - col as i32).unsigned_abs() as f32;
+                let f = (1.0 - (dist / 4.0).min(1.0)) * s * 0.45;
+                if f > 0.05 {
+                    self.set_key(r, c, Self::dim_color(color, f));
+                }
+            }
+        }
+        self.push()
+    }
+
+    /// Horizontal sine wave wash.
+    pub fn ambient_wave(&mut self, phase: f64, color: u32, strength: f32) -> Result<(), ChromaError> {
+        self.clear(0);
+        let s = strength.clamp(0.05, 1.0);
+        for r in 0..MAX_ROW {
+            for c in 0..MAX_COL {
+                let x = c as f64 / MAX_COL as f64;
+                let wave = ((x * std::f64::consts::TAU * 1.5 + phase * 2.2).sin() + 1.0) * 0.5;
+                let f = (wave as f32) * s * 0.5;
+                if f > 0.06 {
+                    self.set_key(r, c, Self::dim_color(color, f));
+                }
+            }
+        }
+        self.push()
+    }
+
+    /// Whole-keyboard breathing (global pulse).
+    pub fn ambient_breath(&mut self, phase: f64, color: u32, strength: f32) -> Result<(), ChromaError> {
+        self.clear(0);
+        let s = strength.clamp(0.05, 1.0);
+        let breath = (((phase * 1.8).sin() + 1.0) * 0.5) as f32;
+        let f = (0.12 + breath * 0.55) * s;
+        let c = Self::dim_color(color, f);
+        for r in 0..MAX_ROW {
+            for col in 0..MAX_COL {
+                self.set_key(r, col, c);
+            }
+        }
+        self.push()
+    }
+
+    /// Expanding ring from center.
+    pub fn ambient_ripple(&mut self, phase: f64, color: u32, strength: f32) -> Result<(), ChromaError> {
+        self.clear(0);
+        let s = strength.clamp(0.05, 1.0);
+        let cx = (MAX_COL as f64 - 1.0) / 2.0;
+        let cy = (MAX_ROW as f64 - 1.0) / 2.0;
+        let radius = (phase * 0.9).rem_euclid(1.0) * (cx.max(cy) + 2.0);
+        for r in 0..MAX_ROW {
+            for c in 0..MAX_COL {
+                let dist = ((c as f64 - cx).powi(2) + (r as f64 - cy).powi(2)).sqrt();
+                let ring = 1.0 - ((dist - radius).abs() / 1.8).min(1.0);
+                let f = (ring as f32) * s * 0.7;
+                if f > 0.08 {
+                    self.set_key(r, c, Self::dim_color(color, f));
+                }
+            }
+        }
+        self.push()
+    }
 }
 
 impl Drop for ChromaKeyboard {

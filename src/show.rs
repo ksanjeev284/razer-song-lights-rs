@@ -4,7 +4,7 @@ use crate::audio::AudioPlayer;
 use crate::chroma::ChromaKeyboard;
 use crate::lrc::{lines_to_timed_words, parse_lrc_lines, TimedLine, TimedWord};
 use crate::sync_sim::{line_index_for_time, word_index_for_time};
-use crate::themes::{themed_color, LightTheme, RepeatMode};
+use crate::themes::{themed_color, AmbientEffect, LightTheme, RepeatMode};
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -30,6 +30,10 @@ pub struct ShowConfig {
     pub repeat: RepeatMode,
     pub theme: LightTheme,
     pub brightness: f32,
+    /// Soft keyboard wash between lyric hits
+    pub ambient_pulse: bool,
+    /// Ambient effect style (Pulse / Wave / Breath / Ripple / Off)
+    pub ambient_effect: AmbientEffect,
 }
 
 impl Default for ShowConfig {
@@ -45,6 +49,8 @@ impl Default for ShowConfig {
             repeat: RepeatMode::Off,
             theme: LightTheme::Rainbow,
             brightness: 1.0,
+            ambient_pulse: true,
+            ambient_effect: AmbientEffect::Pulse,
         }
     }
 }
@@ -63,6 +69,8 @@ pub struct ShowHandle {
     /// A-B loop: (a_bits, b_bits); 0 = unset for either end
     ab_a: Arc<std::sync::atomic::AtomicU64>,
     ab_b: Arc<std::sync::atomic::AtomicU64>,
+    ambient: Arc<AtomicBool>,
+    ambient_effect: Arc<std::sync::atomic::AtomicU8>,
 }
 
 impl ShowHandle {
@@ -236,6 +244,39 @@ impl ShowHandle {
     pub fn first_lyric_time(&self) -> Option<f64> {
         self.lines.first().map(|l| l.t)
     }
+
+    pub fn set_ambient(&self, on: bool) {
+        self.ambient.store(on, Ordering::Relaxed);
+    }
+
+    pub fn set_ambient_effect(&self, effect: AmbientEffect) {
+        self.ambient_effect
+            .store(effect.index(), Ordering::Relaxed);
+        self.ambient.store(effect.is_on(), Ordering::Relaxed);
+    }
+
+    /// Seek to nearest timed lyric line.
+    pub fn snap_to_lyric(&self) -> anyhow::Result<f64> {
+        let pos = self.position_s() - self.offset();
+        let times: Vec<f64> = self.lines.iter().map(|l| l.t).collect();
+        let t = crate::playlists::snap_to_nearest_lyric(pos, &times)
+            .ok_or_else(|| anyhow::anyhow!("no lyrics"))?;
+        self.seek((t + self.offset()).max(0.0))
+    }
+
+    /// Seconds until next timed line (for UI countdown).
+    pub fn secs_to_next_line(&self) -> Option<f64> {
+        let pos = self.position_s();
+        let off = self.offset();
+        let idx = line_index_for_time(&self.lines, pos, off);
+        let next = if idx < 0 {
+            self.lines.first()
+        } else {
+            self.lines.get((idx + 1) as usize)
+        }?;
+        let t = next.t + off;
+        Some((t - pos).max(0.0))
+    }
 }
 
 impl Drop for ShowHandle {
@@ -315,6 +356,13 @@ fn start_show_with_stop(
     ));
     let ab_a = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let ab_b = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let effect = if cfg.ambient_pulse {
+        cfg.ambient_effect
+    } else {
+        AmbientEffect::Off
+    };
+    let ambient = Arc::new(AtomicBool::new(effect.is_on()));
+    let ambient_effect = Arc::new(std::sync::atomic::AtomicU8::new(effect.index()));
     let ended = Arc::new(AtomicBool::new(false));
 
     let audio = if cfg.play_audio {
@@ -340,6 +388,8 @@ fn start_show_with_stop(
     let bright_thread = brightness.clone();
     let ab_a_t = ab_a.clone();
     let ab_b_t = ab_b.clone();
+    let ambient_t = ambient.clone();
+    let ambient_effect_t = ambient_effect.clone();
     let ended_thread = ended.clone();
     let duration = duration_s;
 
@@ -357,6 +407,8 @@ fn start_show_with_stop(
             bright_thread,
             ab_a_t,
             ab_b_t,
+            ambient_t,
+            ambient_effect_t,
             ended_thread,
         );
     });
@@ -373,6 +425,8 @@ fn start_show_with_stop(
         brightness,
         ab_a,
         ab_b,
+        ambient,
+        ambient_effect,
     })
 }
 
@@ -389,6 +443,8 @@ fn run_engine(
     brightness: Arc<std::sync::atomic::AtomicU32>,
     ab_a: Arc<std::sync::atomic::AtomicU64>,
     ab_b: Arc<std::sync::atomic::AtomicU64>,
+    ambient: Arc<AtomicBool>,
+    ambient_effect: Arc<std::sync::atomic::AtomicU8>,
     ended: Arc<AtomicBool>,
 ) {
     let mut chroma = if cfg.lights && crate::chroma::is_chroma_supported() {
@@ -408,6 +464,7 @@ fn run_engine(
     let mut last_line: isize = -1;
     let mut last_printed: isize = -2;
     let mut idle_spins = 0u32;
+    let mut last_ambient = std::time::Instant::now();
 
     if cfg.karaoke_console {
         println!();
@@ -525,6 +582,34 @@ fn run_engine(
                         }
                     }
                 }
+            }
+        }
+
+        // Ambient wash between lyric hits (optional, throttled)
+        if !did_work
+            && ambient.load(Ordering::Relaxed)
+            && last_ambient.elapsed() > Duration::from_millis(120)
+        {
+            if let Some(kb) = chroma.as_mut() {
+                let color = themed_color(th, (pos * 2.0) as usize, bright * 0.55);
+                let strength = bright * 0.5;
+                let phase = pos * 0.35;
+                match AmbientEffect::from_index(ambient_effect.load(Ordering::Relaxed)) {
+                    AmbientEffect::Off => {}
+                    AmbientEffect::Pulse => {
+                        let _ = kb.ambient_pulse(phase, color, strength);
+                    }
+                    AmbientEffect::Wave => {
+                        let _ = kb.ambient_wave(phase, color, strength);
+                    }
+                    AmbientEffect::Breath => {
+                        let _ = kb.ambient_breath(phase, color, strength);
+                    }
+                    AmbientEffect::Ripple => {
+                        let _ = kb.ambient_ripple(phase, color, strength);
+                    }
+                }
+                last_ambient = std::time::Instant::now();
             }
         }
 
