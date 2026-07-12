@@ -11,6 +11,8 @@ pub mod audio;
 pub mod cache;
 pub mod chroma;
 pub mod color;
+pub mod gui;
+pub mod history;
 pub mod key_map;
 pub mod lrc;
 pub mod lrclib;

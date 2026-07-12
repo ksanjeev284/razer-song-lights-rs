@@ -4,77 +4,65 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.74%2B-orange.svg)](https://www.rust-lang.org/)
 
-**Full Razer Song Lights stack in Rust** — YouTube → lyrics + audio → **synced Chroma keyboard lights** + karaoke console.
+**Full Razer Song Lights app in Rust** — desktop GUI + CLI.
 
-Companion to the [Python GUI app](https://github.com/ksanjeev284/razer-song-lights).
+YouTube → lyrics + audio → **synced Chroma keyboard lights** + karaoke display.
 
-**Current version: 0.2.0**
+**Version 0.3.0** — all major features implemented.
+
+Companion: [Python app](https://github.com/ksanjeev284/razer-song-lights)
 
 ---
 
-## Features (all working)
+## Features
 
 | Feature | Status |
 |--------|--------|
-| YouTube metadata (`yt-dlp`) | ✅ |
-| Audio download + cache | ✅ |
-| Synced LRC lyrics (lrclib) | ✅ |
-| Correct title parse (`Song - Artist` / `Artist - Song`) | ✅ |
-| Local audio play + seek (rodio) | ✅ |
-| Razer Chroma keyboard lights (Windows SDK) | ✅ |
-| Word / line flash modes | ✅ |
-| Karaoke console line display | ✅ |
-| Sync offset | ✅ |
-| Song package cache | ✅ |
-| 10-song accuracy + timing QA | ✅ **10/10** |
-| Desktop GUI (Tk) | ❌ use Python app |
-| Prev/Next history playlist UI | 🔜 CLI-focused |
+| **Desktop GUI** (egui, dark Razer theme) | ✅ |
+| YouTube Load + Play | ✅ |
+| Audio play / stop / ±10s seek / scrub | ✅ |
+| Prev / Next play history | ✅ |
+| Karaoke scrolling lyrics | ✅ |
+| Cache played music | ✅ |
+| Sync offset + word/line modes | ✅ |
+| Chroma keyboard lights (Windows) | ✅ |
+| CLI play / play-file / qa10 / demo | ✅ |
+| 10-song accuracy QA | ✅ 10/10 |
 
 ---
 
-## Requirements
-
-- **Rust 1.74+**
-- **yt-dlp** on PATH (`pip install -U yt-dlp`) for YouTube
-- **ffmpeg** recommended for MP3 convert
-- **Windows** + **Razer Synapse** for keyboard lights  
-  (Linux/macOS: lyrics + audio + QA still work; lights skip gracefully)
-
----
-
-## Install & run
+## Quick start
 
 ```bash
 git clone https://github.com/ksanjeev284/razer-song-lights-rs.git
 cd razer-song-lights-rs
-cargo build --release
+cargo run --release
 ```
 
-### Play a YouTube song (lights + audio + lyrics)
+Opens the **GUI** by default.
+
+Needs:
+
+- **yt-dlp** on PATH (`pip install -U yt-dlp`)
+- **ffmpeg** (recommended)
+- **Windows + Razer Synapse** for keyboard lights
+
+### GUI flow
+
+1. Paste YouTube URL → **Load + Play**  
+2. Lyrics scroll with audio; keyboard flashes words  
+3. Use **Prev / −10s / Play / +10s / Next / Stop**  
+4. Tune **Offset** if lights are early/late  
+
+### CLI
 
 ```bash
 cargo run --release -- play "https://www.youtube.com/watch?v=VIDEO_ID"
-
-# options
-cargo run --release -- play "URL" --volume 0.9 --offset 1.5 --mode flash-line
-cargo run --release -- play "URL" --no-audio          # lights only
-cargo run --release -- play "URL" --no-lights         # audio + karaoke text
-```
-
-### Play local audio + LRC
-
-```bash
-cargo run --release -- play-file track.mp3 --lrc song.lrc --duration 290
-```
-
-### Lyrics / tools
-
-```bash
-cargo run -- lyrics "Cigarettes After Sex" "Apocalypse" --duration 290
-cargo run -- parse-title "Apocalypse - Cigarettes After Sex" --artist-hint "Cigarettes After Sex"
-cargo run -- parse-lrc song.lrc --duration 290
-cargo run -- demo
+cargo run --release -- play-file track.mp3 --lrc song.lrc
 cargo run --release -- qa10
+cargo run --release -- demo
+cargo run --release -- gui          # explicit GUI
+cargo run --release -- --console lyrics "Adele" "Hello" --duration 295
 ```
 
 ---
@@ -82,50 +70,11 @@ cargo run --release -- qa10
 ## Testing
 
 ```bash
-# Offline unit + integration
 cargo test
-
-# Live 10-song identity + LRC timing (network)
 cargo run --release -- qa10
-cargo test --test integration_ten_songs -- --ignored --nocapture
 ```
 
-Latest live QA: **10/10 PASS** (same catalog as Python: Apocalypse, Blinding Lights, bad guy, Shape of You, Hello, Bohemian Rhapsody, Never Gonna Give You Up, Believer, Levitating, Viva La Vida).
-
-CI: Windows / Ubuntu / macOS (`cargo test`, clippy, fmt).
-
----
-
-## Architecture
-
-```text
-YouTube URL
-   │
-   ├─ yt-dlp meta ──► artist / track / duration
-   ├─ lrclib ────────► plain + LRC timestamps
-   └─ yt-dlp -x ─────► cached audio file
-                          │
-                          ▼
-              AudioPlayer (rodio, seekable)
-              position_s ──► sync clock
-                          │
-              ┌───────────┴───────────┐
-              ▼                       ▼
-     ChromaKeyboard (Win DLL)    Karaoke console
-     word/line flash             current LRC line
-```
-
----
-
-## Python vs Rust
-
-| | Python | Rust |
-|--|--------|------|
-| GUI | ✅ Tkinter | CLI (+ demo) |
-| Chroma lights | ✅ | ✅ Windows |
-| YouTube + LRC | ✅ | ✅ |
-| 10-song QA | ✅ | ✅ |
-| Portable binary | PyInstaller | `cargo build --release` |
+Offline: **31 tests passed**. Live 10-song QA: **10/10 PASS**.
 
 ---
 

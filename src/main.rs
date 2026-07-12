@@ -1,4 +1,4 @@
-//! Razer Song Lights (Rust) — full-featured CLI.
+//! Razer Song Lights (Rust) — GUI by default + full CLI.
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -11,9 +11,7 @@ use razer_song_lights_rs::lyrics_match::contains_phrase;
 use razer_song_lights_rs::show::{run_show, PlayMode, ShowConfig};
 use razer_song_lights_rs::song_catalog::SONG_CATALOG;
 use razer_song_lights_rs::sync_sim::simulate_sync;
-use razer_song_lights_rs::title::{
-    clean_track_name, is_youtube_url, names_similar, split_title,
-};
+use razer_song_lights_rs::title::{clean_track_name, is_youtube_url, names_similar, split_title};
 use razer_song_lights_rs::youtube::{download_audio, extract_meta};
 use razer_song_lights_rs::VERSION;
 use std::fs;
@@ -26,11 +24,15 @@ use std::time::Instant;
 #[command(
     name = "razer-song-lights",
     version = VERSION,
-    about = "Razer Song Lights (Rust) — YouTube lyrics, audio, Chroma keyboard light show"
+    about = "Razer Song Lights (Rust) — GUI, YouTube, audio, Chroma lights, karaoke"
 )]
 struct Cli {
+    /// Force console CLI (default opens GUI when no subcommand)
+    #[arg(long)]
+    console: bool,
+
     #[command(subcommand)]
-    cmd: Commands,
+    cmd: Option<Commands>,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -41,6 +43,8 @@ enum ModeArg {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Open the desktop GUI (default)
+    Gui,
     /// Fetch synced lyrics for an artist / track
     Lyrics {
         artist: String,
@@ -50,21 +54,18 @@ enum Commands {
         #[arg(long)]
         lrc: bool,
     },
-    /// Parse an LRC file and print timing summary
     ParseLrc {
         path: PathBuf,
         #[arg(long, default_value_t = 0.0)]
         duration: f64,
     },
-    /// Parse a YouTube-style title into track + artist
     ParseTitle {
         title: String,
         #[arg(long, default_value = "")]
         artist_hint: String,
     },
-    /// Load a YouTube URL → lyrics + audio + Chroma light show
+    /// Load a YouTube URL → lyrics + audio + light show (CLI)
     Play {
-        /// YouTube URL, or artist name if --track is set
         url_or_artist: String,
         #[arg(long)]
         track: Option<String>,
@@ -83,7 +84,6 @@ enum Commands {
         #[arg(long)]
         no_cache: bool,
     },
-    /// Play a local audio file with LRC or plain lyrics file
     PlayFile {
         audio: PathBuf,
         #[arg(long)]
@@ -101,12 +101,10 @@ enum Commands {
         #[arg(long)]
         no_lights: bool,
     },
-    /// Run 10-song live accuracy + timing/sync QA
     Qa10 {
         #[arg(long)]
         json: Option<PathBuf>,
     },
-    /// Demo light flash (no YouTube)
     Demo {
         #[arg(long)]
         no_lights: bool,
@@ -115,7 +113,14 @@ enum Commands {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    match cli.cmd {
+
+    // Default → GUI
+    if cli.cmd.is_none() && !cli.console {
+        return launch_gui();
+    }
+
+    match cli.cmd.unwrap_or(Commands::Gui) {
+        Commands::Gui => launch_gui()?,
         Commands::Lyrics {
             artist,
             track,
@@ -133,11 +138,10 @@ fn main() -> Result<()> {
             }
         }
         Commands::ParseLrc { path, duration } => {
-            let text = fs::read_to_string(&path)
-                .with_context(|| format!("read {}", path.display()))?;
+            let text = fs::read_to_string(&path)?;
             let lines = parse_lrc_lines(&text);
             if lines.is_empty() {
-                bail!("no timed lines in {}", path.display());
+                bail!("no timed lines");
             }
             let q = lrc_quality_score(&text, duration);
             let last = lines.last().unwrap().t;
@@ -146,27 +150,19 @@ fn main() -> Result<()> {
             } else {
                 0.0
             };
-            println!("lines: {}", lines.len());
             println!(
-                "first: {:.2}s  last: {:.2}s  coverage: {:.0}%  quality: {:.1}",
+                "lines={} first={:.1}s last={:.1}s coverage={:.0}% quality={:.1}",
+                lines.len(),
                 lines[0].t,
                 last,
                 cov * 100.0,
                 q
             );
-            for (i, ln) in lines.iter().take(8).enumerate() {
-                println!("  [{i}] {:6.2}s  {}", ln.t, ln.text);
-            }
-            if lines.len() > 8 {
-                println!("  … {} more", lines.len() - 8);
-            }
             simulate_sync(&lines, 0.0).map_err(|e| anyhow::anyhow!(e))?;
-            println!("sync simulation: OK");
         }
         Commands::ParseTitle { title, artist_hint } => {
             let (track, artist) = split_title(&title, &artist_hint);
-            let track = clean_track_name(&track);
-            println!("track:  {track}");
+            println!("track:  {}", clean_track_name(&track));
             println!("artist: {artist}");
         }
         Commands::Play {
@@ -179,19 +175,17 @@ fn main() -> Result<()> {
             no_audio,
             no_lights,
             no_cache,
-        } => {
-            play_command(
-                &url_or_artist,
-                track.as_deref(),
-                duration,
-                volume,
-                offset,
-                mode,
-                no_audio,
-                no_lights,
-                no_cache,
-            )?;
-        }
+        } => play_command(
+            &url_or_artist,
+            track.as_deref(),
+            duration,
+            volume,
+            offset,
+            mode,
+            no_audio,
+            no_lights,
+            no_cache,
+        )?,
         Commands::PlayFile {
             audio,
             lrc,
@@ -201,18 +195,16 @@ fn main() -> Result<()> {
             offset,
             mode,
             no_lights,
-        } => {
-            play_file(
-                &audio,
-                lrc.as_deref(),
-                lyrics.as_deref(),
-                duration,
-                volume,
-                offset,
-                mode,
-                no_lights,
-            )?;
-        }
+        } => play_file(
+            &audio,
+            lrc.as_deref(),
+            lyrics.as_deref(),
+            duration,
+            volume,
+            offset,
+            mode,
+            no_lights,
+        )?,
         Commands::Qa10 { json } => run_qa10(json)?,
         Commands::Demo { no_lights } => {
             let stop = install_ctrlc();
@@ -223,12 +215,23 @@ fn main() -> Result<()> {
                 lights: !no_lights,
                 karaoke_console: true,
                 sync_offset_s: 0.0,
+                loop_play: false,
             };
-            let sample = "hello world\nlights on stage\nsing with me";
-            run_show(sample, None, 12.0, None, &cfg, stop)?;
+            run_show(
+                "hello world\nlights on stage\nsing with me",
+                None,
+                12.0,
+                None,
+                &cfg,
+                stop,
+            )?;
         }
     }
     Ok(())
+}
+
+fn launch_gui() -> Result<()> {
+    razer_song_lights_rs::gui::run_gui().map_err(|e| anyhow::anyhow!("GUI error: {e}"))
 }
 
 fn install_ctrlc() -> Arc<AtomicBool> {
@@ -263,130 +266,88 @@ fn play_command(
     let cache_root = default_cache_root();
     let audio_dir = cache_root.join("audio");
 
-    let (artist, track_name, duration_s, url, video_id, hit, audio_path) =
-        if is_youtube_url(url_or_artist) {
-            println!("Fetching YouTube metadata…");
-            let meta = extract_meta(url_or_artist)?;
-            println!(
-                "Resolved: {} — {} ({:.0}s)",
-                meta.artist, meta.track, meta.duration_s
-            );
+    let (artist, track_name, duration_s, hit, audio_path) = if is_youtube_url(url_or_artist) {
+        println!("Fetching YouTube metadata…");
+        let meta = extract_meta(url_or_artist)?;
+        println!(
+            "Resolved: {} — {} ({:.0}s)",
+            meta.artist, meta.track, meta.duration_s
+        );
 
-            // Cache package
-            if !no_cache {
-                if let Some(pkg) = load_song_package(&cache_root, &meta.video_id) {
-                    println!("Loaded lyrics from cache: {}", pkg.display_name());
-                    let audio = if !no_audio {
-                        if let Some(p) = &pkg.audio_path {
-                            if PathBuf::from(p).is_file() {
-                                Some(PathBuf::from(p))
-                            } else {
-                                println!("Downloading audio…");
-                                Some(download_audio(&meta.url, &meta.video_id, &audio_dir)?)
-                            }
-                        } else {
-                            println!("Downloading audio…");
-                            Some(download_audio(&meta.url, &meta.video_id, &audio_dir)?)
-                        }
-                    } else {
-                        None
-                    };
-                    let hit = razer_song_lights_rs::LyricsHit {
-                        plain: pkg.lyrics.clone(),
-                        synced_lrc: pkg.synced_lrc.clone(),
-                        source: format!("{} (cache)", pkg.source),
-                    };
-                    (
-                        pkg.artist,
-                        pkg.track,
-                        pkg.duration_s,
-                        pkg.url,
-                        pkg.video_id,
-                        hit,
-                        audio,
-                    )
-                } else {
-                    println!("Searching lyrics…");
-                    let hit = fetch_lyrics(&meta.artist, &meta.track, meta.duration_s)
-                        .with_context(|| "lyrics fetch")?;
-                    println!(
-                        "Lyrics: {} ({})",
-                        hit.source,
-                        if hit.is_synced() {
-                            "synced LRC"
-                        } else {
-                            "plain"
-                        }
-                    );
-                    let audio = if !no_audio {
-                        println!("Downloading audio…");
-                        Some(download_audio(&meta.url, &meta.video_id, &audio_dir)?)
-                    } else {
-                        None
-                    };
-                    let mut pkg = SongPackage::from_hit(
-                        &meta.artist,
-                        &meta.track,
-                        meta.duration_s,
-                        &hit,
-                        &meta.video_id,
-                        &meta.url,
-                    );
-                    if let Some(ref p) = audio {
+        if !no_cache {
+            if let Some(mut pkg) = load_song_package(&cache_root, &meta.video_id) {
+                println!("Loaded from cache: {}", pkg.display_name());
+                if !no_audio
+                    && pkg
+                        .audio_path
+                        .as_ref()
+                        .map(|p| !PathBuf::from(p).is_file())
+                        .unwrap_or(true)
+                {
+                    println!("Downloading audio…");
+                    if let Ok(p) = download_audio(&meta.url, &meta.video_id, &audio_dir) {
                         pkg.audio_path = Some(p.display().to_string());
                     }
-                    if !no_cache {
-                        let _ = save_song_package(&cache_root, &pkg);
-                    }
-                    (
-                        meta.artist,
-                        meta.track,
-                        meta.duration_s,
-                        meta.url,
-                        meta.video_id,
-                        hit,
-                        audio,
-                    )
                 }
+                let hit = razer_song_lights_rs::LyricsHit {
+                    plain: pkg.lyrics.clone(),
+                    synced_lrc: pkg.synced_lrc.clone(),
+                    source: format!("{} (cache)", pkg.source),
+                };
+                (
+                    pkg.artist,
+                    pkg.track,
+                    pkg.duration_s,
+                    hit,
+                    pkg.audio_path.map(PathBuf::from),
+                )
             } else {
                 println!("Searching lyrics…");
                 let hit = fetch_lyrics(&meta.artist, &meta.track, meta.duration_s)?;
+                println!("Lyrics: {}", hit.source);
                 let audio = if !no_audio {
                     println!("Downloading audio…");
                     Some(download_audio(&meta.url, &meta.video_id, &audio_dir)?)
                 } else {
                     None
                 };
-                (
-                    meta.artist,
-                    meta.track,
+                let mut pkg = SongPackage::from_hit(
+                    &meta.artist,
+                    &meta.track,
                     meta.duration_s,
-                    meta.url,
-                    meta.video_id,
-                    hit,
-                    audio,
-                )
+                    &hit,
+                    &meta.video_id,
+                    &meta.url,
+                );
+                if let Some(ref p) = audio {
+                    pkg.audio_path = Some(p.display().to_string());
+                }
+                let _ = save_song_package(&cache_root, &pkg);
+                (meta.artist, meta.track, meta.duration_s, hit, audio)
             }
         } else {
-            // artist + --track
-            let track = track.ok_or_else(|| {
-                anyhow::anyhow!("pass a YouTube URL, or artist with --track \"Song Name\"")
-            })?;
-            let artist = url_or_artist.to_string();
-            println!("Searching lyrics for {artist} — {track}…");
-            let hit = fetch_lyrics(&artist, track, duration)?;
-            (
-                artist,
-                track.to_string(),
-                duration,
-                String::new(),
-                String::new(),
-                hit,
-                None,
-            )
-        };
+            let hit = fetch_lyrics(&meta.artist, &meta.track, meta.duration_s)?;
+            let audio = if !no_audio {
+                Some(download_audio(&meta.url, &meta.video_id, &audio_dir)?)
+            } else {
+                None
+            };
+            (meta.artist, meta.track, meta.duration_s, hit, audio)
+        }
+    } else {
+        let track = track.ok_or_else(|| {
+            anyhow::anyhow!("pass a YouTube URL, or artist with --track \"Song\"")
+        })?;
+        let hit = fetch_lyrics(url_or_artist, track, duration)?;
+        (
+            url_or_artist.to_string(),
+            track.to_string(),
+            duration,
+            hit,
+            None,
+        )
+    };
 
-    let _ = (url, video_id);
     println!("Now playing: {artist} — {track_name}");
     let cfg = ShowConfig {
         mode: mode_from(mode),
@@ -395,6 +356,7 @@ fn play_command(
         play_audio: !no_audio && audio_path.is_some(),
         lights: !no_lights,
         karaoke_console: true,
+        loop_play: false,
     };
     run_show(
         &hit.plain,
@@ -419,7 +381,7 @@ fn play_file(
     no_lights: bool,
 ) -> Result<()> {
     let stop = install_ctrlc();
-    let mut synced: Option<String> = None;
+    let mut synced = None;
     let mut plain = String::new();
     if let Some(p) = lrc {
         let text = fs::read_to_string(p)?;
@@ -432,11 +394,6 @@ fn play_file(
     if plain.is_empty() {
         bail!("provide --lrc and/or --lyrics");
     }
-    let dur = if duration > 0.0 {
-        duration
-    } else {
-        240.0
-    };
     let cfg = ShowConfig {
         mode: mode_from(mode),
         volume,
@@ -444,11 +401,12 @@ fn play_file(
         play_audio: true,
         lights: !no_lights,
         karaoke_console: true,
+        loop_play: false,
     };
     run_show(
         &plain,
         synced.as_deref(),
-        dur,
+        if duration > 0.0 { duration } else { 240.0 },
         Some(audio),
         &cfg,
         stop,
@@ -457,121 +415,73 @@ fn play_file(
 }
 
 fn run_qa10(json_path: Option<PathBuf>) -> Result<()> {
-    println!("========================================================================");
-    println!("10-SONG LYRICS ACCURACY + TIMING/SYNC QA (Rust)");
-    println!("========================================================================");
-
+    println!("10-SONG QA (Rust)");
     let mut reports = Vec::new();
     for (i, song) in SONG_CATALOG.iter().enumerate() {
         print!("[{}/10] {} — {} … ", i + 1, song.artist, song.track);
         let t0 = Instant::now();
-        let mut errors: Vec<String> = Vec::new();
-        let mut warnings: Vec<String> = Vec::new();
-
+        let mut errors = Vec::new();
         let mut title_ok = true;
         for title in song.youtube_titles {
             let (track, artist) = split_title(title, song.artist);
             let track = clean_track_name(&track);
-            if !names_similar(&track, song.track) {
+            if !names_similar(&track, song.track) || names_similar(&track, &artist) {
                 title_ok = false;
-                errors.push(format!("title parse {title:?} → {track}"));
-            }
-            if names_similar(&track, &artist) {
-                title_ok = false;
-                errors.push(format!("track≈artist for {title:?}"));
+                errors.push(format!("title {title}"));
             }
         }
-
         let hit = match fetch_lyrics(song.artist, song.track, song.duration_s) {
             Ok(h) => h,
             Err(e) => {
-                errors.push(format!("fetch: {e}"));
                 println!("FAIL");
-                reports.push(serde_json::json!({
-                    "id": song.id, "ok": false, "errors": errors,
-                }));
+                reports.push(serde_json::json!({"id": song.id, "ok": false, "err": e.to_string()}));
                 continue;
             }
         };
-
         let mut identity_ok = true;
         for p in song.must_contain {
             if !contains_phrase(&hit.plain, p) {
                 identity_ok = false;
-                errors.push(format!("missing phrase: {p}"));
+                errors.push(format!("missing {p}"));
             }
         }
         for p in song.must_not_contain {
             if contains_phrase(&hit.plain, p) {
                 identity_ok = false;
-                errors.push(format!("wrong-song phrase: {p}"));
+                errors.push(format!("wrong {p}"));
             }
         }
-
         let mut timing_ok = false;
         let mut sync_ok = false;
-        let mut timed_lines = 0usize;
-        let mut coverage = 0.0;
-
+        let mut timed_lines = 0;
         if let Some(lrc) = &hit.synced_lrc {
             let lines = parse_lrc_lines(lrc);
             timed_lines = lines.len();
             if !lines.is_empty() {
-                coverage = lines.last().unwrap().t / song.duration_s;
-                if timed_lines >= song.min_timed_lines && coverage >= song.min_coverage {
-                    timing_ok = true;
-                } else {
-                    errors.push(format!(
-                        "timing lines={timed_lines} coverage={:.0}%",
-                        coverage * 100.0
-                    ));
-                }
-                match simulate_sync(&lines, 0.0) {
-                    Ok(_) => sync_ok = true,
-                    Err(e) => errors.push(format!("sync sim: {e}")),
-                }
+                let cov = lines.last().unwrap().t / song.duration_s;
+                timing_ok = timed_lines >= song.min_timed_lines && cov >= song.min_coverage;
+                sync_ok = simulate_sync(&lines, 0.0).is_ok();
             }
-        } else {
-            warnings.push("no synced LRC".into());
-            errors.push("missing synced LRC".into());
         }
-
         let ok = title_ok && identity_ok && timing_ok && sync_ok;
         println!(
-            "{}  identity={identity_ok} timing={timing_ok} sync={sync_ok} lines={timed_lines} src={}",
+            "{} lines={timed_lines} src={}",
             if ok { "PASS" } else { "FAIL" },
             hit.source
         );
         reports.push(serde_json::json!({
-            "id": song.id,
-            "artist": song.artist,
-            "track": song.track,
-            "ok": ok,
-            "title_parse_ok": title_ok,
-            "identity_ok": identity_ok,
-            "timing_ok": timing_ok,
-            "sync_sim_ok": sync_ok,
-            "source": hit.source,
-            "timed_lines": timed_lines,
-            "coverage": coverage,
-            "errors": errors,
-            "warnings": warnings,
-            "elapsed_s": t0.elapsed().as_secs_f64(),
+            "id": song.id, "ok": ok, "identity_ok": identity_ok,
+            "timing_ok": timing_ok, "sync_ok": sync_ok,
+            "errors": errors, "elapsed": t0.elapsed().as_secs_f64(),
         }));
     }
-
-    let passed = reports
-        .iter()
-        .filter(|r| r["ok"].as_bool() == Some(true))
-        .count();
-    println!();
-    println!("Result: {passed}/{} songs fully PASS", reports.len());
-    if let Some(path) = json_path {
-        fs::write(&path, serde_json::to_string_pretty(&reports)?)?;
-        println!("JSON → {}", path.display());
+    let passed = reports.iter().filter(|r| r["ok"] == true).count();
+    println!("Result: {passed}/10");
+    if let Some(p) = json_path {
+        fs::write(p, serde_json::to_string_pretty(&reports)?)?;
     }
     if passed < 7 {
-        bail!("QA failed: only {passed}/10 passed");
+        bail!("QA failed");
     }
     Ok(())
 }
