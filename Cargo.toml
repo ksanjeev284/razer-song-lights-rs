@@ -1,8 +1,8 @@
 [package]
 name = "razer-song-lights-rs"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
-description = "Razer Chroma keyboard lyric light show — YouTube, audio, LRC sync, Chroma lights (Windows), full CLI"
+description = "Razer Song Lights — full GUI, YouTube, audio, Chroma lights, karaoke, optimized engine"
 license = "MIT"
 repository = "https://github.com/ksanjeev284/razer-song-lights-rs"
 readme = "README.md"

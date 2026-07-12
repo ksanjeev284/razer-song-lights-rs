@@ -1,83 +1,72 @@
 # razer-song-lights-rs
 
-[![CI](https://github.com/ksanjeev284/razer-song-lights-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/ksanjeev284/razer-song-lights-rs/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.74%2B-orange.svg)](https://www.rust-lang.org/)
+**Full Razer Song Lights app in Rust** — optimized GUI + CLI.
 
-**Full Razer Song Lights app in Rust** — desktop GUI + CLI.
+**v0.4.0** — more features, lower CPU, seek-safe binary-search sync.
 
-YouTube → lyrics + audio → **synced Chroma keyboard lights** + karaoke display.
-
-**Version 0.3.0** — all major features implemented.
-
-Companion: [Python app](https://github.com/ksanjeev284/razer-song-lights)
+Repo: https://github.com/ksanjeev284/razer-song-lights-rs
 
 ---
 
 ## Features
 
-| Feature | Status |
-|--------|--------|
-| **Desktop GUI** (egui, dark Razer theme) | ✅ |
-| YouTube Load + Play | ✅ |
-| Audio play / stop / ±10s seek / scrub | ✅ |
-| Prev / Next play history | ✅ |
-| Karaoke scrolling lyrics | ✅ |
-| Cache played music | ✅ |
-| Sync offset + word/line modes | ✅ |
-| Chroma keyboard lights (Windows) | ✅ |
-| CLI play / play-file / qa10 / demo | ✅ |
-| 10-song accuracy QA | ✅ 10/10 |
+| Feature | |
+|--------|--|
+| Desktop GUI (dark Razer theme) | ✅ |
+| YouTube Load + Play + cache | ✅ |
+| Audio: play / pause / stop / mute / speed 0.5–1.5× | ✅ |
+| Seek ±10s + scrub bar | ✅ |
+| Prev / Next history + **Library panel** | ✅ |
+| **Favorites** (Ctrl+F / ★) | ✅ |
+| Karaoke scroll + lyric filter + copy | ✅ |
+| Auto-next when track ends | ✅ |
+| Settings saved between sessions | ✅ |
+| Keyboard shortcuts | ✅ |
+| Chroma lights (Windows) | ✅ |
+| CLI + 10-song QA | ✅ |
+
+### Keyboard shortcuts
+
+| Key | Action |
+|-----|--------|
+| **Space** | Pause / Resume (or Play) |
+| **← / →** | Seek −10s / +10s |
+| **M** | Mute toggle |
+| **Ctrl+F** | Favorite current song |
+| **Ctrl+O** | Open lyrics file |
 
 ---
 
-## Quick start
+## Run
 
 ```bash
-git clone https://github.com/ksanjeev284/razer-song-lights-rs.git
-cd razer-song-lights-rs
 cargo run --release
 ```
 
-Opens the **GUI** by default.
-
-Needs:
-
-- **yt-dlp** on PATH (`pip install -U yt-dlp`)
-- **ffmpeg** (recommended)
-- **Windows + Razer Synapse** for keyboard lights
-
-### GUI flow
-
-1. Paste YouTube URL → **Load + Play**  
-2. Lyrics scroll with audio; keyboard flashes words  
-3. Use **Prev / −10s / Play / +10s / Next / Stop**  
-4. Tune **Offset** if lights are early/late  
-
-### CLI
-
-```bash
-cargo run --release -- play "https://www.youtube.com/watch?v=VIDEO_ID"
-cargo run --release -- play-file track.mp3 --lrc song.lrc
-cargo run --release -- qa10
-cargo run --release -- demo
-cargo run --release -- gui          # explicit GUI
-cargo run --release -- --console lyrics "Adele" "Hello" --duration 295
-```
+Requires: **yt-dlp**, **ffmpeg** (recommended), **Razer Synapse** on Windows for lights.
 
 ---
 
-## Testing
+## Optimizations (0.4)
+
+- **O(log n)** binary search for LRC line/word index (long songs)
+- **Adaptive engine sleep** — lower CPU when idle between lyric events
+- **Atomic offset** (no mutex on hot path)
+- **Pause-aware** audio clock (no position drift)
+- **Seek-safe** light index (works after scrub / reverse seek)
+- Fewer redundant Chroma flashes (only on line/word change)
+
+---
+
+## Tests
 
 ```bash
-cargo test
-cargo run --release -- qa10
+cargo test          # 35 offline tests
+cargo run -- qa10   # live 10-song accuracy
 ```
-
-Offline: **31 tests passed**. Live 10-song QA: **10/10 PASS**.
 
 ---
 
 ## License
 
-[MIT](LICENSE) © 2026 [ksanjeev284](https://github.com/ksanjeev284)
+MIT © 2026 ksanjeev284

@@ -1,4 +1,4 @@
-//! Local audio playback with seek + position (rodio 0.21).
+//! Local audio playback with pause, mute, speed, seek + position (rodio 0.21).
 
 use rodio::source::Source;
 use rodio::{Decoder, OutputStream, Sink};
@@ -24,10 +24,14 @@ struct State {
     base_s: f64,
     started: Option<Instant>,
     volume: f32,
+    speed: f32,
+    muted: bool,
+    vol_before_mute: f32,
     playing: bool,
+    paused: bool,
 }
 
-/// Play / stop / seek a single music file; expose song position in seconds.
+/// Play / pause / stop / seek a single music file; expose song position in seconds.
 pub struct AudioPlayer {
     stream: OutputStream,
     sink: Arc<Mutex<Option<Sink>>>,
@@ -46,7 +50,11 @@ impl AudioPlayer {
                 base_s: 0.0,
                 started: None,
                 volume: 0.85,
+                speed: 1.0,
+                muted: false,
+                vol_before_mute: 0.85,
                 playing: false,
+                paused: false,
             })),
         })
     }
@@ -57,15 +65,23 @@ impl AudioPlayer {
         }
         self.stop();
         let vol = volume.clamp(0.0, 1.0);
-        self.start_from(path, vol, start_s.max(0.0))?;
+        self.start_from(path, vol, start_s.max(0.0), 1.0)?;
         Ok(())
     }
 
-    fn start_from(&self, path: &Path, volume: f32, start_s: f64) -> Result<(), AudioError> {
+    fn start_from(
+        &self,
+        path: &Path,
+        volume: f32,
+        start_s: f64,
+        speed: f32,
+    ) -> Result<(), AudioError> {
         let file = File::open(path).map_err(|e| AudioError::NotFound(e.to_string()))?;
         let reader = BufReader::new(file);
         let decoder = Decoder::new(reader).map_err(|e| AudioError::Decode(e.to_string()))?;
-        let source = decoder.skip_duration(Duration::from_secs_f64(start_s.max(0.0)));
+        let source = decoder
+            .skip_duration(Duration::from_secs_f64(start_s.max(0.0)))
+            .speed(speed.clamp(0.5, 1.5));
 
         let sink = Sink::connect_new(self.stream.mixer());
         sink.set_volume(volume);
@@ -82,9 +98,16 @@ impl AudioPlayer {
             st.base_s = start_s.max(0.0);
             st.started = Some(Instant::now());
             st.volume = volume;
+            st.speed = speed.clamp(0.5, 1.5);
             st.playing = true;
+            st.paused = false;
+            if st.muted {
+                if let Some(sink) = self.sink.lock().unwrap().as_ref() {
+                    sink.set_volume(0.0);
+                }
+            }
         }
-        std::thread::sleep(Duration::from_millis(40));
+        std::thread::sleep(Duration::from_millis(25));
         Ok(())
     }
 
@@ -94,22 +117,124 @@ impl AudioPlayer {
         }
         let mut st = self.state.lock().unwrap();
         st.playing = false;
+        st.paused = false;
         st.started = None;
         st.base_s = 0.0;
         st.path = None;
     }
 
+    /// Freeze playback; position stays at current song time.
+    pub fn pause(&self) {
+        let mut st = self.state.lock().unwrap();
+        if !st.playing || st.paused {
+            return;
+        }
+        // Capture position before clearing started
+        let elapsed = st
+            .started
+            .map(|t| t.elapsed().as_secs_f64() * st.speed as f64)
+            .unwrap_or(0.0);
+        st.base_s += elapsed;
+        st.started = None;
+        st.paused = true;
+        drop(st);
+        if let Some(sink) = self.sink.lock().unwrap().as_ref() {
+            sink.pause();
+        }
+    }
+
+    pub fn resume(&self) {
+        let mut st = self.state.lock().unwrap();
+        if !st.playing || !st.paused {
+            return;
+        }
+        st.started = Some(Instant::now());
+        st.paused = false;
+        drop(st);
+        if let Some(sink) = self.sink.lock().unwrap().as_ref() {
+            sink.play();
+        }
+    }
+
+    pub fn toggle_pause(&self) {
+        let paused = self.state.lock().unwrap().paused;
+        if paused {
+            self.resume();
+        } else {
+            self.pause();
+        }
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.state.lock().unwrap().paused
+    }
+
     pub fn set_volume(&self, volume: f32) {
         let vol = volume.clamp(0.0, 1.0);
-        if let Some(sink) = self.sink.lock().unwrap().as_ref() {
-            sink.set_volume(vol);
+        let mut st = self.state.lock().unwrap();
+        st.volume = vol;
+        if !st.muted {
+            st.vol_before_mute = vol;
         }
-        self.state.lock().unwrap().volume = vol;
+        let muted = st.muted;
+        drop(st);
+        if let Some(sink) = self.sink.lock().unwrap().as_ref() {
+            sink.set_volume(if muted { 0.0 } else { vol });
+        }
+    }
+
+    pub fn toggle_mute(&self) {
+        let mut st = self.state.lock().unwrap();
+        if st.muted {
+            st.muted = false;
+            let v = st.vol_before_mute;
+            st.volume = v;
+            drop(st);
+            if let Some(sink) = self.sink.lock().unwrap().as_ref() {
+                sink.set_volume(v);
+            }
+        } else {
+            st.muted = true;
+            st.vol_before_mute = st.volume;
+            drop(st);
+            if let Some(sink) = self.sink.lock().unwrap().as_ref() {
+                sink.set_volume(0.0);
+            }
+        }
+    }
+
+    pub fn is_muted(&self) -> bool {
+        self.state.lock().unwrap().muted
+    }
+
+    /// Playback rate 0.5–1.5 (restarts from current position).
+    pub fn set_speed(&self, speed: f32) -> Result<(), AudioError> {
+        let speed = speed.clamp(0.5, 1.5);
+        let (path, vol, pos) = {
+            let st = self.state.lock().unwrap();
+            let pos = self.position_unlocked(&st);
+            (
+                st.path
+                    .clone()
+                    .ok_or_else(|| AudioError::NotFound("no track loaded".into()))?,
+                st.volume,
+                pos,
+            )
+        };
+        if let Some(sink) = self.sink.lock().unwrap().take() {
+            sink.stop();
+        }
+        self.start_from(&path, vol, pos, speed)?;
+        Ok(())
+    }
+
+    pub fn speed(&self) -> f32 {
+        self.state.lock().unwrap().speed
     }
 
     pub fn is_playing(&self) -> bool {
         let st = self.state.lock().unwrap();
-        if !st.playing {
+        if !st.playing || st.paused {
             return false;
         }
         if let Some(sink) = self.sink.lock().unwrap().as_ref() {
@@ -119,14 +244,27 @@ impl AudioPlayer {
         }
     }
 
+    /// True if a track is loaded (playing or paused).
+    pub fn is_active(&self) -> bool {
+        let st = self.state.lock().unwrap();
+        st.playing && st.path.is_some()
+    }
+
     pub fn get_position_s(&self) -> f64 {
         let st = self.state.lock().unwrap();
+        self.position_unlocked(&st)
+    }
+
+    fn position_unlocked(&self, st: &State) -> f64 {
         if !st.playing {
+            return st.base_s;
+        }
+        if st.paused || st.started.is_none() {
             return st.base_s;
         }
         let elapsed = st
             .started
-            .map(|t| t.elapsed().as_secs_f64())
+            .map(|t| t.elapsed().as_secs_f64() * st.speed as f64)
             .unwrap_or(0.0);
         st.base_s + elapsed
     }
@@ -136,20 +274,25 @@ impl AudioPlayer {
     }
 
     pub fn seek(&self, position_s: f64) -> Result<f64, AudioError> {
-        let (path, vol) = {
+        let (path, vol, speed, was_paused) = {
             let st = self.state.lock().unwrap();
             (
                 st.path
                     .clone()
                     .ok_or_else(|| AudioError::NotFound("no track loaded".into()))?,
                 st.volume,
+                st.speed,
+                st.paused,
             )
         };
         if let Some(sink) = self.sink.lock().unwrap().take() {
             sink.stop();
         }
         let pos = position_s.max(0.0);
-        self.start_from(&path, vol, pos)?;
+        self.start_from(&path, vol, pos, speed)?;
+        if was_paused {
+            self.pause();
+        }
         Ok(pos)
     }
 
@@ -171,14 +314,11 @@ mod tests {
 
     #[test]
     fn missing_file() {
-        // Device may be unavailable on headless CI — only assert path error if player opens
         match AudioPlayer::new() {
             Ok(ap) => {
                 assert!(ap.play(Path::new("no_such_file.mp3"), 0.5, 0.0).is_err());
             }
-            Err(_) => {
-                // no audio device — still OK for unit CI
-            }
+            Err(_) => {}
         }
     }
 }

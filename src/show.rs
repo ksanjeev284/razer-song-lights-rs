@@ -3,7 +3,7 @@
 use crate::audio::AudioPlayer;
 use crate::chroma::{color_for_index, ChromaKeyboard};
 use crate::lrc::{lines_to_timed_words, parse_lrc_lines, TimedLine, TimedWord};
-use crate::sync_sim::line_index_for_time;
+use crate::sync_sim::{line_index_for_time, word_index_for_time};
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,11 +45,12 @@ impl Default for ShowConfig {
 /// Handle to a background light/audio show.
 pub struct ShowHandle {
     stop: Arc<AtomicBool>,
+    ended: Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
     audio: Option<Arc<AudioPlayer>>,
     lines: Arc<Vec<TimedLine>>,
     duration_s: f64,
-    offset_s: Arc<std::sync::Mutex<f64>>,
+    offset_s: Arc<std::sync::atomic::AtomicU64>, // f64 bits
 }
 
 impl ShowHandle {
@@ -65,11 +66,17 @@ impl ShowHandle {
 
     pub fn is_running(&self) -> bool {
         !self.stop.load(Ordering::SeqCst)
+            && !self.ended.load(Ordering::SeqCst)
             && self
                 .audio
                 .as_ref()
-                .map(|a| a.is_playing())
+                .map(|a| a.is_active())
                 .unwrap_or(self.join.as_ref().map(|j| !j.is_finished()).unwrap_or(false))
+    }
+
+    /// Natural end of track (for auto-next).
+    pub fn has_ended(&self) -> bool {
+        self.ended.load(Ordering::SeqCst)
     }
 
     pub fn position_s(&self) -> f64 {
@@ -85,7 +92,7 @@ impl ShowHandle {
 
     pub fn seek(&self, pos: f64) -> anyhow::Result<f64> {
         if let Some(a) = &self.audio {
-            Ok(a.seek(pos.max(0.0))?)
+            Ok(a.seek(pos.max(0.0).min(self.duration_s.max(0.0)))?)
         } else {
             Ok(pos.max(0.0))
         }
@@ -93,7 +100,13 @@ impl ShowHandle {
 
     pub fn seek_relative(&self, delta: f64) -> anyhow::Result<f64> {
         if let Some(a) = &self.audio {
-            Ok(a.seek_relative(delta)?)
+            let cur = a.get_position_s();
+            let max = if self.duration_s > 0.0 {
+                self.duration_s
+            } else {
+                f64::MAX
+            };
+            Ok(a.seek((cur + delta).clamp(0.0, max))?)
         } else {
             Ok(0.0)
         }
@@ -105,8 +118,52 @@ impl ShowHandle {
         }
     }
 
+    pub fn pause(&self) {
+        if let Some(a) = &self.audio {
+            a.pause();
+        }
+    }
+
+    pub fn resume(&self) {
+        if let Some(a) = &self.audio {
+            a.resume();
+        }
+    }
+
+    pub fn toggle_pause(&self) {
+        if let Some(a) = &self.audio {
+            a.toggle_pause();
+        }
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.audio.as_ref().map(|a| a.is_paused()).unwrap_or(false)
+    }
+
+    pub fn toggle_mute(&self) {
+        if let Some(a) = &self.audio {
+            a.toggle_mute();
+        }
+    }
+
+    pub fn is_muted(&self) -> bool {
+        self.audio.as_ref().map(|a| a.is_muted()).unwrap_or(false)
+    }
+
+    pub fn set_speed(&self, speed: f32) -> anyhow::Result<()> {
+        if let Some(a) = &self.audio {
+            a.set_speed(speed)?;
+        }
+        Ok(())
+    }
+
     pub fn set_offset(&self, offset: f64) {
-        *self.offset_s.lock().unwrap() = offset;
+        self.offset_s
+            .store(offset.to_bits(), Ordering::Relaxed);
+    }
+
+    fn offset(&self) -> f64 {
+        f64::from_bits(self.offset_s.load(Ordering::Relaxed))
     }
 
     pub fn lines(&self) -> Arc<Vec<TimedLine>> {
@@ -114,9 +171,7 @@ impl ShowHandle {
     }
 
     pub fn active_line_index(&self) -> isize {
-        let pos = self.position_s();
-        let off = *self.offset_s.lock().unwrap();
-        line_index_for_time(&self.lines, pos, off)
+        line_index_for_time(&self.lines, self.position_s(), self.offset())
     }
 }
 
@@ -186,8 +241,12 @@ fn start_show_with_stop(
         estimated_lines(lyrics_plain, duration_s)
     };
     let words = lines_to_timed_words(&lines, duration_s);
+    let word_starts: Vec<f64> = words.iter().map(|w| w.t).collect();
     let lines_arc = Arc::new(lines);
-    let offset_s = Arc::new(std::sync::Mutex::new(cfg.sync_offset_s));
+    let offset_s = Arc::new(std::sync::atomic::AtomicU64::new(
+        cfg.sync_offset_s.to_bits(),
+    ));
+    let ended = Arc::new(AtomicBool::new(false));
 
     let audio = if cfg.play_audio {
         if let Some(path) = audio_path {
@@ -204,25 +263,30 @@ fn start_show_with_stop(
     let audio_thread = audio.clone();
     let lines_thread = lines_arc.clone();
     let words_thread = words;
+    let starts_thread = word_starts;
     let cfg = cfg.clone();
     let stop_thread = stop.clone();
     let offset_thread = offset_s.clone();
+    let ended_thread = ended.clone();
     let duration = duration_s;
 
     let join = thread::spawn(move || {
         run_engine(
             &lines_thread,
             &words_thread,
+            &starts_thread,
             duration,
             audio_thread.as_ref().map(|a| a.as_ref()),
             &cfg,
             stop_thread,
             offset_thread,
+            ended_thread,
         );
     });
 
     Ok(ShowHandle {
         stop,
+        ended,
         join: Some(join),
         audio,
         lines: lines_arc,
@@ -234,11 +298,13 @@ fn start_show_with_stop(
 fn run_engine(
     lines: &[TimedLine],
     words: &[TimedWord],
+    word_starts: &[f64],
     duration_s: f64,
     audio: Option<&AudioPlayer>,
     cfg: &ShowConfig,
     stop: Arc<AtomicBool>,
-    offset_s: Arc<std::sync::Mutex<f64>>,
+    offset_s: Arc<std::sync::atomic::AtomicU64>,
+    ended: Arc<AtomicBool>,
 ) {
     let mut chroma = if cfg.lights && crate::chroma::is_chroma_supported() {
         match ChromaKeyboard::open() {
@@ -256,6 +322,7 @@ fn run_engine(
     let mut last_word: isize = -1;
     let mut last_line: isize = -1;
     let mut last_printed: isize = -2;
+    let mut idle_spins = 0u32;
 
     if cfg.karaoke_console {
         println!();
@@ -275,6 +342,11 @@ fn run_engine(
         }
 
         let pos = if let Some(a) = audio {
+            // Paused: keep loop alive, skip light spam
+            if a.is_paused() {
+                thread::sleep(Duration::from_millis(40));
+                continue;
+            }
             if !a.is_playing() && a.get_position_s() > 0.5 {
                 if cfg.loop_play {
                     let _ = a.seek(0.0);
@@ -282,6 +354,7 @@ fn run_engine(
                     last_line = -1;
                     continue;
                 }
+                ended.store(true, Ordering::SeqCst);
                 break;
             }
             a.get_position_s()
@@ -298,16 +371,19 @@ fn run_engine(
                 last_line = -1;
                 continue;
             }
+            ended.store(true, Ordering::SeqCst);
             break;
         }
 
-        let offset = *offset_s.lock().unwrap();
+        let offset = f64::from_bits(offset_s.load(Ordering::Relaxed));
+        let mut did_work = false;
 
         // Karaoke console
         if cfg.karaoke_console && !lines.is_empty() {
             let idx = line_index_for_time(lines, pos, offset);
             if idx != last_printed {
                 last_printed = idx;
+                did_work = true;
                 if idx >= 0 {
                     let ln = &lines[idx as usize];
                     print!("\r\x1b[2K");
@@ -328,16 +404,17 @@ fn run_engine(
                     let idx = line_index_for_time(lines, pos, offset);
                     if idx != last_line && idx >= 0 {
                         last_line = idx;
+                        did_work = true;
                         let i = idx as usize;
                         let color = color_for_index(i);
                         let _ = kb.flash_text_hit(&lines[i].text, color);
                     }
                 }
                 PlayMode::FlashWord => {
-                    let idx = active_word_index(words, pos, offset);
-                    if let Some(i) = idx {
+                    if let Some(i) = word_index_for_time(word_starts, pos, offset) {
                         if i as isize != last_word {
                             last_word = i as isize;
+                            did_work = true;
                             let color = color_for_index(i);
                             let _ = kb.flash_text_hit(&words[i].word, color);
                         }
@@ -346,7 +423,15 @@ fn run_engine(
             }
         }
 
-        thread::sleep(Duration::from_millis(20));
+        // Adaptive sleep: longer when nothing changed (lower CPU)
+        if did_work {
+            idle_spins = 0;
+            thread::sleep(Duration::from_millis(12));
+        } else {
+            idle_spins = idle_spins.saturating_add(1);
+            let ms = if idle_spins > 20 { 35 } else { 18 };
+            thread::sleep(Duration::from_millis(ms));
+        }
     }
 
     if cfg.karaoke_console {
@@ -363,20 +448,10 @@ fn run_engine(
     stop.store(true, Ordering::SeqCst);
 }
 
-/// Last word whose start time has been reached (seek-safe).
+/// Last word whose start time has been reached (seek-safe, O(log n)).
 pub fn active_word_index(words: &[TimedWord], pos: f64, offset: f64) -> Option<usize> {
-    if words.is_empty() {
-        return None;
-    }
-    let mut active = None;
-    for (i, w) in words.iter().enumerate() {
-        if pos + 0.02 >= w.t + offset {
-            active = Some(i);
-        } else {
-            break;
-        }
-    }
-    active
+    let starts: Vec<f64> = words.iter().map(|w| w.t).collect();
+    word_index_for_time(&starts, pos, offset)
 }
 
 pub fn build_timed_lines(

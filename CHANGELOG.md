@@ -1,30 +1,28 @@
 # Changelog
 
-## [0.3.0] — 2026-07-12
+## [0.4.0] — 2026-07-12
 
-### All features
-- **Desktop GUI** (egui) — default on launch
-- YouTube load worker thread + progress status
-- Transport: Prev · −10s · Play · +10s · Next · Stop · scrub
-- Play history queue (session + disk)
-- Karaoke lyric panel (past / current / future)
-- Settings: volume, offset, mode, cache, loop, lights
-- Library: Sample, Open file, Open URL, Clear, Replay
-- Seek-safe light engine (works after scrub/backward seek)
+### Features
+- Pause / Resume, Mute, playback **speed** (0.5–1.5×)
+- **Auto-next** when a track ends
+- **Favorites** + Library side panel (history + stars)
+- **Keyboard shortcuts** (Space, arrows, M, Ctrl+F, Ctrl+O)
+- **Settings persistence** (volume, offset, mode, toggles)
+- Lyric **filter** + copy current line
+- Save prefs button
+
+### Optimizations
+- Binary search for active LRC line/word (`O(log n)`)
+- Adaptive sleep in light engine (lower idle CPU)
+- Atomic sync offset on hot path
+- Pause freezes song clock correctly; speed scales position
+- Engine ends cleanly for auto-next
 
 ### Tests
-- 31 offline unit/integration tests
+- 35 offline unit/integration tests
 
 ---
 
-## [0.2.0] — 2026-07-12
-
-### Full play pipeline
-- YouTube + audio + Chroma CLI show
-
----
-
-## [0.1.0] — 2026-07-12
-
-### Core library
-- LRC, title parse, lrclib, 10-song QA
+## [0.3.0] — GUI + full parity
+## [0.2.0] — CLI play pipeline
+## [0.1.0] — Core library
