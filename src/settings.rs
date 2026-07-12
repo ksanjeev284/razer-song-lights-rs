@@ -74,6 +74,21 @@ pub struct AppSettings {
     /// Recent search queries.
     #[serde(default)]
     pub search_history: Vec<String>,
+    /// Write now_playing.txt for OBS/streaming overlays.
+    #[serde(default = "default_true")]
+    pub now_playing_file: bool,
+    /// Highlight active word within the current line (Musixmatch-style).
+    #[serde(default = "default_true")]
+    pub word_highlight: bool,
+    /// Show next upcoming lyric lines strip.
+    #[serde(default = "default_true")]
+    pub show_upcoming: bool,
+    /// Party mode: large lyrics, fewer controls.
+    #[serde(default)]
+    pub party_mode: bool,
+    /// 3-2-1 countdown before first lyric on fresh play.
+    #[serde(default)]
+    pub preroll_countdown: bool,
 }
 
 fn default_cookies_browser() -> String {
@@ -125,6 +140,11 @@ impl Default for AppSettings {
             auto_skip_intro: false,
             hide_past_lyrics: false,
             search_history: Vec::new(),
+            now_playing_file: true,
+            word_highlight: true,
+            show_upcoming: true,
+            party_mode: false,
+            preroll_countdown: false,
         }
     }
 }

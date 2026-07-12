@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.11.0] — unreleased
+
+### Features (inspired by karaoke / Musixmatch / streamer tools)
+- **Word-by-word highlight** on active lyric line
+- **Loop line practice** (`L`) — A-B on current line
+- **3-2-1 pre-roll countdown** before first lyric
+- **Party mode** — big lyrics overlay, upcoming lines
+- **Dual lyrics / translation** paste pane (shown in party/karaoke)
+- **OBS now_playing.txt** writer for stream overlays
+- **Soft visualizer bars** under the scrubber
+- **Upcoming lines** strip (next 1–3)
+
+No GitHub release — master only.
+
+---
+
 ## [0.10.0] — unreleased
 
 ### Features

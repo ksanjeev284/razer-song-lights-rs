@@ -6,7 +6,7 @@ use crate::cache::{
 };
 use crate::chroma::{is_chroma_supported, ChromaKeyboard};
 use crate::history::{load_history_packages, push_history, PlayQueue};
-use crate::lrc::lrc_quality_score;
+use crate::lrc::{lines_to_timed_words, lrc_quality_score, TimedWord};
 use crate::lrclib::fetch_lyrics;
 use crate::playlists::{timed_lines_to_lrc, PlaylistStore};
 use crate::settings::{AppSettings, Favorites};
@@ -14,7 +14,7 @@ use crate::show::{build_timed_lines, start_show, PlayMode, ShowConfig, ShowHandl
 use crate::song_catalog::SONG_CATALOG;
 use crate::song_memory::{export_playlist, parse_playlist_urls, SongMemory};
 use crate::stats::{Bookmarks, ListenStats};
-use crate::sync_sim::line_index_for_time;
+use crate::sync_sim::{line_index_for_time, word_index_for_time};
 use crate::themes::{AmbientEffect, LightTheme, RepeatMode};
 use crate::title::is_youtube_url;
 use crate::youtube::{
@@ -171,6 +171,18 @@ struct SongLightsGui {
     search_history: Vec<String>,
     song_note: String,
     fade_in_until: Option<Instant>,
+    now_playing_file: bool,
+    word_highlight: bool,
+    show_upcoming: bool,
+    party_mode: bool,
+    preroll_countdown: bool,
+    timed_words: Vec<TimedWord>,
+    active_word: Option<usize>,
+    dual_lyrics: String,
+    practice_loops: u32,
+    last_np_write: Instant,
+    preroll_until: Option<Instant>,
+    visualizer_phase: f32,
 }
 
 impl SongLightsGui {
@@ -286,6 +298,18 @@ impl SongLightsGui {
             search_history: settings.search_history,
             song_note: String::new(),
             fade_in_until: None,
+            now_playing_file: settings.now_playing_file,
+            word_highlight: settings.word_highlight,
+            show_upcoming: settings.show_upcoming,
+            party_mode: settings.party_mode,
+            preroll_countdown: settings.preroll_countdown,
+            timed_words: Vec::new(),
+            active_word: None,
+            dual_lyrics: String::new(),
+            practice_loops: 0,
+            last_np_write: Instant::now(),
+            preroll_until: None,
+            visualizer_phase: 0.0,
         }
     }
 
@@ -334,6 +358,11 @@ impl SongLightsGui {
             auto_skip_intro: self.auto_skip_intro,
             hide_past_lyrics: self.hide_past_lyrics,
             search_history: self.search_history.clone(),
+            now_playing_file: self.now_playing_file,
+            word_highlight: self.word_highlight,
+            show_upcoming: self.show_upcoming,
+            party_mode: self.party_mode,
+            preroll_countdown: self.preroll_countdown,
             ..AppSettings::default()
         };
         s.set_play_mode(self.mode);
@@ -463,6 +492,8 @@ impl SongLightsGui {
         } else {
             build_timed_lines(&plain, None, 0.0)
         };
+        self.timed_words = lines_to_timed_words(&self.timed_lines, self.duration_s);
+        self.active_word = None;
         self.active_line = -1;
         self.lrc_quality = self
             .synced_lrc
@@ -534,6 +565,13 @@ impl SongLightsGui {
                     self.fade_in_until = Some(Instant::now() + Duration::from_millis(900));
                 } else {
                     self.fade_in_until = None;
+                }
+                if self.preroll_countdown && resume <= 0.0 && !self.auto_skip_intro {
+                    self.preroll_until = Some(Instant::now() + Duration::from_secs(3));
+                    h.pause();
+                    self.status = "3… get ready".into();
+                } else {
+                    self.preroll_until = None;
                 }
                 self.stats.record_play(&self.song_label);
                 if !self.video_id.is_empty() {
@@ -613,6 +651,58 @@ impl SongLightsGui {
             }
         });
         self.status = "Chroma test sweep…".into();
+    }
+
+    fn write_now_playing(&self, pos: f64) {
+        let root = default_cache_root();
+        let _ = std::fs::create_dir_all(&root);
+        let line = if self.active_line >= 0 {
+            self.timed_lines
+                .get(self.active_line as usize)
+                .map(|l| l.text.as_str())
+                .unwrap_or("")
+        } else {
+            ""
+        };
+        let word = self
+            .active_word
+            .and_then(|i| self.timed_words.get(i))
+            .map(|w| w.word.as_str())
+            .unwrap_or("");
+        let body = format!(
+            "{}\n{}\n{} / {}\n{}\n{}\n",
+            self.song_label,
+            self.url,
+            Self::fmt_time(pos),
+            Self::fmt_time(self.duration_s),
+            line,
+            word
+        );
+        let _ = std::fs::write(root.join("now_playing.txt"), body);
+    }
+
+    fn loop_current_line(&mut self) {
+        if self.active_line < 0 {
+            self.status = "No active line to loop".into();
+            return;
+        }
+        let i = self.active_line as usize;
+        if let Some(ln) = self.timed_lines.get(i) {
+            let a = ln.t + self.offset as f64;
+            let b = if i + 1 < self.timed_lines.len() {
+                self.timed_lines[i + 1].t + self.offset as f64
+            } else {
+                ln.end_t + self.offset as f64
+            };
+            self.ab_a = Some(a.max(0.0));
+            self.ab_b = Some(b.max(a + 0.3));
+            if let Some(s) = &self.show {
+                s.set_ab_loop(self.ab_a, self.ab_b);
+                let _ = s.seek(a.max(0.0));
+            }
+            self.practice_loops = self.practice_loops.saturating_add(1);
+            self.status = format!("Practice loop line {} (×{})", i + 1, self.practice_loops);
+        }
     }
 
     fn export_favorites_m3u(&mut self) {
@@ -784,6 +874,8 @@ impl SongLightsGui {
         }
         self.timed_lines =
             build_timed_lines(&pkg.lyrics, pkg.synced_lrc.as_deref(), pkg.duration_s);
+        self.timed_words = lines_to_timed_words(&self.timed_lines, pkg.duration_s);
+        self.active_word = None;
         self.queue.push(pkg);
         self.status = format!("Loaded {}", self.song_label);
         if autoplay {
@@ -1125,6 +1217,13 @@ impl SongLightsGui {
             if i.key_pressed(Key::R) && !i.modifiers.matches_logically(Modifiers::CTRL) {
                 replay_line = true;
             }
+            // L handled below via separate flag
+        });
+        let mut loop_line = false;
+        ctx.input(|i| {
+            if i.key_pressed(Key::L) && !i.modifiers.matches_logically(Modifiers::CTRL) {
+                loop_line = true;
+            }
             if i.modifiers.matches_logically(Modifiers::CTRL) && i.key_pressed(Key::O) {
                 open = true;
             }
@@ -1252,6 +1351,9 @@ impl SongLightsGui {
                 }
             }
         }
+        if loop_line && !focus_text {
+            self.loop_current_line();
+        }
         if mute && !focus_text {
             if let Some(s) = &self.show {
                 s.toggle_mute();
@@ -1357,6 +1459,24 @@ impl eframe::App for SongLightsGui {
         if self.fading_show.is_some() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
+        // Pre-roll 3-2-1 countdown (karaoke practice)
+        if let Some(until) = self.preroll_until {
+            let left = until
+                .saturating_duration_since(Instant::now())
+                .as_secs_f32();
+            if left <= 0.0 {
+                self.preroll_until = None;
+                if let Some(s) = &self.show {
+                    s.resume();
+                }
+                self.status = format!("Go! — {}", self.song_label);
+            } else {
+                let n = left.ceil() as i32;
+                self.status = format!("{n}…");
+                ctx.request_repaint_after(Duration::from_millis(50));
+            }
+        }
+
         // Fade-in ramp
         if let Some(until) = self.fade_in_until {
             let now = Instant::now();
@@ -1442,6 +1562,18 @@ impl eframe::App for SongLightsGui {
                 self.scrub = (pos / dur).clamp(0.0, 1.0) as f32;
             }
             self.active_line = line_index_for_time(&self.timed_lines, pos, self.offset as f64);
+            if !self.timed_words.is_empty() {
+                let starts: Vec<f64> = self.timed_words.iter().map(|w| w.t).collect();
+                self.active_word = word_index_for_time(&starts, pos, self.offset as f64);
+            } else {
+                self.active_word = None;
+            }
+            self.visualizer_phase = (pos as f32 * 2.5) % 64.0;
+            // Now-playing file for OBS (~1 Hz)
+            if self.now_playing_file && self.last_np_write.elapsed() > Duration::from_millis(800) {
+                self.write_now_playing(pos);
+                self.last_np_write = Instant::now();
+            }
             // Accrue listen stats every ~5s while playing
             if show.is_running() && !show.is_paused() {
                 let elapsed = self.listen_tick.elapsed().as_secs_f64();
@@ -1778,33 +1910,95 @@ impl eframe::App for SongLightsGui {
                 });
         }
 
-        // Fullscreen karaoke overlay
-        if self.fullscreen_karaoke {
+        // Fullscreen karaoke / party overlay
+        if self.fullscreen_karaoke || self.party_mode {
             egui::CentralPanel::default().show(ctx, |ui| {
                 ui.vertical_centered(|ui| {
-                    ui.add_space(ui.available_height() * 0.25);
+                    ui.add_space(ui.available_height() * 0.18);
                     ui.label(RichText::new(&self.song_label).color(DIM).size(14.0));
-                    ui.add_space(20.0);
-                    if self.active_line >= 0 {
+                    if let Some(until) = self.preroll_until {
+                        let n = until
+                            .saturating_duration_since(Instant::now())
+                            .as_secs_f32()
+                            .ceil() as i32;
+                        ui.add_space(30.0);
+                        ui.label(
+                            RichText::new(if n > 0 { format!("{n}") } else { "GO".into() })
+                                .color(ACCENT)
+                                .size(72.0)
+                                .strong(),
+                        );
+                    } else if self.active_line >= 0 {
                         if let Some(ln) = self.timed_lines.get(self.active_line as usize) {
-                            ui.label(RichText::new(&ln.text).color(ACCENT).size(36.0).strong());
+                            ui.add_space(20.0);
+                            if self.word_highlight && self.active_word.is_some() {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 8.0;
+                                    for (wi, w) in self.timed_words.iter().enumerate() {
+                                        // only words of current line approx by time window
+                                        if w.t < ln.t - 0.05 || w.t >= ln.end_t + 0.2 {
+                                            continue;
+                                        }
+                                        let on = self.active_word == Some(wi);
+                                        ui.label(
+                                            RichText::new(&w.word)
+                                                .color(if on { ACCENT } else { DIM })
+                                                .size(if on { 40.0 } else { 32.0 })
+                                                .strong(),
+                                        );
+                                    }
+                                });
+                            } else {
+                                ui.label(RichText::new(&ln.text).color(ACCENT).size(40.0).strong());
+                            }
                         }
                     } else {
                         ui.label(RichText::new("…").color(DIM).size(28.0));
                     }
-                    if let Some(next) = self.timed_lines.get((self.active_line + 1) as usize) {
-                        ui.add_space(16.0);
-                        ui.label(RichText::new(&next.text).color(DIM).size(20.0));
+                    if self.show_upcoming {
+                        for k in 1..=2 {
+                            if let Some(next) =
+                                self.timed_lines.get((self.active_line + k) as usize)
+                            {
+                                ui.add_space(12.0);
+                                ui.label(RichText::new(&next.text).color(DIM).size(if k == 1 {
+                                    22.0
+                                } else {
+                                    16.0
+                                }));
+                            }
+                        }
+                    }
+                    if !self.dual_lyrics.trim().is_empty() && self.active_line >= 0 {
+                        let dual: Vec<&str> = self.dual_lyrics.lines().collect();
+                        if let Some(t) = dual.get(self.active_line as usize) {
+                            ui.add_space(18.0);
+                            ui.label(
+                                RichText::new(*t)
+                                    .color(Color32::from_rgb(0xaa, 0xcc, 0xff))
+                                    .size(20.0),
+                            );
+                        }
                     }
                     ui.add_space(40.0);
                     ui.label(
-                        RichText::new("F11 to exit fullscreen karaoke")
-                            .color(DIM)
-                            .small(),
+                        RichText::new(if self.party_mode {
+                            "Party mode · F11 or uncheck Party to exit"
+                        } else {
+                            "F11 to exit fullscreen karaoke"
+                        })
+                        .color(DIM)
+                        .small(),
                     );
                 });
             });
-            return;
+            if self.party_mode && !self.fullscreen_karaoke {
+                // still allow updates but skip normal layout
+                return;
+            }
+            if self.fullscreen_karaoke {
+                return;
+            }
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -1825,11 +2019,14 @@ impl eframe::App for SongLightsGui {
                         {
                             self.persist_settings();
                         }
+                        if ui.checkbox(&mut self.party_mode, "Party").changed() {
+                            self.persist_settings();
+                        }
                     });
                 });
                 ui.label(
                     RichText::new(
-                        "Space pause · ←/→ seek · N/P next/prev · I skip intro · M mute · Ctrl+B bookmark · F11 karaoke · drop URL/LRC",
+                        "Space pause · ←/→ seek · N/P next/prev · R replay line · L loop line · F11 karaoke · Party mode",
                     )
                     .color(DIM)
                     .size(11.5),
@@ -2083,7 +2280,41 @@ impl eframe::App for SongLightsGui {
                                     .desired_width(f32::INFINITY)
                                     .text(format!("line {:.0}%", lp * 100.0)),
                             );
+                            // Soft visualizer bars (position-driven, streamer aesthetic)
+                            ui.horizontal(|ui| {
+                                let n = 24;
+                                let hmax = 18.0_f32;
+                                for i in 0..n {
+                                    let phase = self.visualizer_phase + i as f32 * 0.45;
+                                    let h = ((phase.sin().abs()) * hmax).max(2.0);
+                                    let (rect, _) = ui.allocate_exact_size(
+                                        Vec2::new(6.0, hmax),
+                                        Sense::hover(),
+                                    );
+                                    let bar = egui::Rect::from_min_size(
+                                        egui::pos2(rect.min.x, rect.max.y - h),
+                                        Vec2::new(5.0, h),
+                                    );
+                                    ui.painter().rect_filled(bar, 1.0, ACCENT);
+                                }
+                            });
                         }
+                    }
+                    if self.show_upcoming && self.active_line >= 0 {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new("Next:").color(DIM).small());
+                            for k in 1..=3 {
+                                if let Some(ln) =
+                                    self.timed_lines.get((self.active_line + k) as usize)
+                                {
+                                    ui.label(
+                                        RichText::new(format!("· {}", ln.text))
+                                            .color(DIM)
+                                            .small(),
+                                    );
+                                }
+                            }
+                        });
                     }
 
                     ui.horizontal(|ui| {
@@ -2194,6 +2425,13 @@ impl eframe::App for SongLightsGui {
                                         format!("Replay line @ {}", Self::fmt_time(t));
                                 }
                             }
+                        }
+                        if ui
+                            .small_button("Loop line")
+                            .on_hover_text("L — A-B practice loop on current line")
+                            .clicked()
+                        {
+                            self.loop_current_line();
                         }
                         if ui.small_button("−30s").clicked() {
                             self.seek_rel(-30.0);
@@ -2415,6 +2653,34 @@ impl eframe::App for SongLightsGui {
                                     }
                                     if i as isize == self.active_line {
                                         resp.scroll_to_me(Some(egui::Align::Center));
+                                        // Word-level highlight under active line
+                                        if self.word_highlight && !self.timed_words.is_empty() {
+                                            ui.horizontal_wrapped(|ui| {
+                                                ui.spacing_mut().item_spacing.x = 6.0;
+                                                for (wi, w) in self.timed_words.iter().enumerate()
+                                                {
+                                                    if w.t < ln.t - 0.05 || w.t > ln.end_t + 0.15
+                                                    {
+                                                        continue;
+                                                    }
+                                                    let on = self.active_word == Some(wi);
+                                                    ui.label(
+                                                        RichText::new(&w.word)
+                                                            .color(if on {
+                                                                ACCENT
+                                                            } else {
+                                                                DIM
+                                                            })
+                                                            .size(if on {
+                                                                base + 2.0
+                                                            } else {
+                                                                base - 1.0
+                                                            })
+                                                            .strong(),
+                                                    );
+                                                }
+                                            });
+                                        }
                                     }
                                 }
                             } else {
@@ -2433,6 +2699,22 @@ impl eframe::App for SongLightsGui {
                             }
                         }
                     });
+
+                ui.collapsing("Dual lyrics / translation (paste line-by-line)", |ui| {
+                    ui.label(
+                        RichText::new(
+                            "Paste a translation with the same number of lines as the song — shown in party/karaoke mode.",
+                        )
+                        .color(DIM)
+                        .small(),
+                    );
+                    ui.add(
+                        egui::TextEdit::multiline(&mut self.dual_lyrics)
+                            .desired_width(f32::INFINITY)
+                            .desired_rows(4)
+                            .hint_text("Optional second language…"),
+                    );
+                });
 
                 ui.add_space(6.0);
                 egui::Frame::none()
@@ -2600,6 +2882,10 @@ impl eframe::App for SongLightsGui {
                                     ui.checkbox(&mut self.sleep_fade, "Sleep fade");
                                     ui.checkbox(&mut self.fade_in, "Fade in");
                                     ui.checkbox(&mut self.auto_skip_intro, "Auto skip intro");
+                                    ui.checkbox(&mut self.word_highlight, "Word highlight");
+                                    ui.checkbox(&mut self.show_upcoming, "Upcoming");
+                                    ui.checkbox(&mut self.now_playing_file, "OBS now_playing");
+                                    ui.checkbox(&mut self.preroll_countdown, "3-2-1 countdown");
                                 });
                                 ui.horizontal(|ui| {
                                     ui.label(RichText::new("Vol preset").color(DIM).small());
