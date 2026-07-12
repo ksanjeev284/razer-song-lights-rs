@@ -1,0 +1,11 @@
+/target
+**/*.rs.bk
+# keep lock for binary app consistency - actually for apps we SHOULD commit lock
+report.json
+*.log
+.idea/
+.vscode/
+
+/target/
+report.json
+

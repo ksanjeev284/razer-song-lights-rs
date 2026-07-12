@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }} / Rust stable)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cargo test (unit + offline integration)
+        run: cargo test --all-targets
+      - name: Cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Cargo fmt check
+        run: cargo fmt -- --check
+
+  ten-song-qa:
+    name: 10-song live QA (network)
+    runs-on: ubuntu-latest
+    # optional: only on main / manual to avoid flaky CI rate limits
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: cargo build --release
+      - name: Run 10-song QA
+        run: cargo run --release -- qa10
+        continue-on-error: true
