@@ -1,25 +1,27 @@
 # Changelog
 
-## [0.5.0] — 2026-07-12
+## [0.6.0] — 2026-07-12
 
 ### Features
-- **8 light themes** + live **brightness** (applies mid-song)
-- **Repeat** Off / One / All + **Shuffle** next
-- **Click lyric line to seek** to that timestamp
-- **F11 fullscreen karaoke** mode
-- **Mini player** + **always on top**
-- **Sleep timer** 15 / 30 / 60 min
-- **Recent URLs** dropdown
-- **Export LRC** file
-- **Cache size** display + **Clear cache**
-- Repeat-one uses engine loop; auto-next respects shuffle/repeat-all
+- **A-B loop** (engine-enforced, live set/clear)
+- **Skip intro** to first lyric timestamp
+- **Bookmarks** with jump buttons
+- **Fade-out on stop** (optional)
+- **Drag-drop** YouTube URL / LRC / TXT
+- **Prefetch** next track audio ~35s before end
+- **Listen stats** (plays, hours, last song)
+- **Lyric font size** slider
+- **Export plain TXT** + share clipboard
+- Shortcuts: **N/P**, **I**, **Ctrl+B**
+- Replay **−5s** button
 
 ### Tests
-- 38 offline unit/integration tests
+- 40 offline unit/integration tests
 
 ---
 
-## [0.4.0] — pause/mute/speed, favorites, shortcuts, optimizations
+## [0.5.0] — themes, F11 karaoke, sleep timer, shuffle/repeat
+## [0.4.0] — pause/mute/speed, favorites, optimizations
 ## [0.3.0] — full GUI
-## [0.2.0] — CLI play pipeline
+## [0.2.0] — CLI play
 ## [0.1.0] — core library

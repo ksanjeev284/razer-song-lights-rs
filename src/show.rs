@@ -60,6 +60,9 @@ pub struct ShowHandle {
     offset_s: Arc<std::sync::atomic::AtomicU64>, // f64 bits
     theme: Arc<std::sync::atomic::AtomicU8>,
     brightness: Arc<std::sync::atomic::AtomicU32>, // f32 bits 0..1
+    /// A-B loop: (a_bits, b_bits); 0 = unset for either end
+    ab_a: Arc<std::sync::atomic::AtomicU64>,
+    ab_b: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl ShowHandle {
@@ -180,6 +183,44 @@ impl ShowHandle {
             .store(b.clamp(0.05, 1.0).to_bits(), Ordering::Relaxed);
     }
 
+    pub fn set_ab_loop(&self, a: Option<f64>, b: Option<f64>) {
+        self.ab_a.store(
+            a.map(|x| x.to_bits()).unwrap_or(0),
+            Ordering::Relaxed,
+        );
+        self.ab_b.store(
+            b.map(|x| x.to_bits()).unwrap_or(0),
+            Ordering::Relaxed,
+        );
+    }
+
+    pub fn clear_ab_loop(&self) {
+        self.ab_a.store(0, Ordering::Relaxed);
+        self.ab_b.store(0, Ordering::Relaxed);
+    }
+
+    pub fn fade_stop(&mut self) {
+        if let Some(a) = self.audio.clone() {
+            let stop = self.stop.clone();
+            thread::spawn(move || {
+                a.fade_out_and_stop(1200);
+                stop.store(true, Ordering::SeqCst);
+            });
+        } else {
+            self.stop();
+        }
+    }
+
+    /// Jump to first timed lyric (skip instrumental intro).
+    pub fn skip_intro(&self) -> anyhow::Result<f64> {
+        if let Some(first) = self.lines.first() {
+            let t = first.t.max(0.0);
+            self.seek(t)
+        } else {
+            Ok(self.position_s())
+        }
+    }
+
     fn offset(&self) -> f64 {
         f64::from_bits(self.offset_s.load(Ordering::Relaxed))
     }
@@ -190,6 +231,10 @@ impl ShowHandle {
 
     pub fn active_line_index(&self) -> isize {
         line_index_for_time(&self.lines, self.position_s(), self.offset())
+    }
+
+    pub fn first_lyric_time(&self) -> Option<f64> {
+        self.lines.first().map(|l| l.t)
     }
 }
 
@@ -268,6 +313,8 @@ fn start_show_with_stop(
     let brightness = Arc::new(std::sync::atomic::AtomicU32::new(
         cfg.brightness.clamp(0.05, 1.0).to_bits(),
     ));
+    let ab_a = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let ab_b = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let ended = Arc::new(AtomicBool::new(false));
 
     let audio = if cfg.play_audio {
@@ -291,6 +338,8 @@ fn start_show_with_stop(
     let offset_thread = offset_s.clone();
     let theme_thread = theme.clone();
     let bright_thread = brightness.clone();
+    let ab_a_t = ab_a.clone();
+    let ab_b_t = ab_b.clone();
     let ended_thread = ended.clone();
     let duration = duration_s;
 
@@ -306,6 +355,8 @@ fn start_show_with_stop(
             offset_thread,
             theme_thread,
             bright_thread,
+            ab_a_t,
+            ab_b_t,
             ended_thread,
         );
     });
@@ -320,6 +371,8 @@ fn start_show_with_stop(
         offset_s,
         theme,
         brightness,
+        ab_a,
+        ab_b,
     })
 }
 
@@ -334,6 +387,8 @@ fn run_engine(
     offset_s: Arc<std::sync::atomic::AtomicU64>,
     theme: Arc<std::sync::atomic::AtomicU8>,
     brightness: Arc<std::sync::atomic::AtomicU32>,
+    ab_a: Arc<std::sync::atomic::AtomicU64>,
+    ab_b: Arc<std::sync::atomic::AtomicU64>,
     ended: Arc<AtomicBool>,
 ) {
     let mut chroma = if cfg.lights && crate::chroma::is_chroma_supported() {
@@ -405,6 +460,22 @@ fn run_engine(
             }
             ended.store(true, Ordering::SeqCst);
             break;
+        }
+
+        // A-B loop
+        let a_bits = ab_a.load(Ordering::Relaxed);
+        let b_bits = ab_b.load(Ordering::Relaxed);
+        if a_bits != 0 && b_bits != 0 {
+            let a = f64::from_bits(a_bits);
+            let b = f64::from_bits(b_bits);
+            if b > a + 0.2 && pos >= b {
+                if let Some(aud) = audio {
+                    let _ = aud.seek(a);
+                    last_word = -1;
+                    last_line = -1;
+                    continue;
+                }
+            }
         }
 
         let offset = f64::from_bits(offset_s.load(Ordering::Relaxed));

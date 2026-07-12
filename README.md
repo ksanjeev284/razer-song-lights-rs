@@ -2,47 +2,55 @@
 
 **Full Razer Song Lights app in Rust** — GUI + CLI + Chroma lights.
 
-**v0.5.0** — more player features (themes, karaoke fullscreen, sleep timer, cache tools, …)
+**v0.6.0** — A-B loop, bookmarks, skip intro, fade stop, drag-drop, stats, prefetch, more shortcuts.
 
 https://github.com/ksanjeev284/razer-song-lights-rs
-
----
-
-## Run
 
 ```bash
 cargo run --release
 ```
 
-Needs **yt-dlp**, **ffmpeg** (recommended), **Razer Synapse** (Windows lights).
-
 ---
 
-## Features
+## Highlights (v0.6)
 
-| Area | Features |
-|------|----------|
-| **Playback** | Play / Pause / Stop / Mute / Speed 0.5–1.5× / Scrub / ±10s |
-| **Queue** | Prev / Next / History / Favorites / Shuffle / Repeat Off·One·All / Auto-next |
-| **YouTube** | Load + Play, cache, recent URLs dropdown |
-| **Karaoke** | Scrolling lyrics, filter, click-line-to-seek, F11 fullscreen, export LRC |
-| **Lights** | Word/Line modes, 8 color themes, brightness, live updates |
-| **Extras** | Sleep timer 15/30/60m, always-on-top, mini player, clear cache, saved prefs |
-| **Shortcuts** | Space · ←/→ · M · Ctrl+F · Ctrl+O · F11 |
+| Feature | |
+|--------|--|
+| **A-B loop** | Click A⟷B twice to set loop range; third clears |
+| **Skip intro** | Jump to first LRC line (`I`) |
+| **Bookmarks** | Ctrl+B / 📌, click to jump back |
+| **Fade stop** | Smooth volume fade on stop |
+| **Drag & drop** | Drop YouTube URL or `.lrc`/`.txt` onto window |
+| **Prefetch next** | Downloads next song audio near track end |
+| **Listen stats** | Songs played + hours listened |
+| **Lyric font size** | Adjustable |
+| **Export TXT / Share** | Plain lyrics + share clipboard |
+| **N / P** | Next / previous song |
 
-### Light themes
-Rainbow · Razer Green · Fire · Ice · Purple · Gold · Pink · White
+Plus all earlier features: themes, brightness, F11 karaoke, shuffle/repeat, sleep timer, favorites, cache tools, shortcuts, etc.
+
+### Shortcuts
+
+| Key | Action |
+|-----|--------|
+| Space | Pause / resume |
+| ← → | Seek ±10s |
+| N / P | Next / prev |
+| I | Skip intro |
+| M | Mute |
+| Ctrl+B | Bookmark |
+| Ctrl+F | Favorite |
+| Ctrl+O | Open file |
+| F11 | Fullscreen karaoke |
 
 ---
 
 ## Tests
 
 ```bash
-cargo test   # 38 offline tests
+cargo test   # 40 offline tests
 ```
 
 ---
-
-## License
 
 MIT © 2026 ksanjeev284

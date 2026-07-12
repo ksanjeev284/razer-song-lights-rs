@@ -15,6 +15,7 @@ pub mod gui;
 pub mod history;
 pub mod key_map;
 pub mod settings;
+pub mod stats;
 pub mod themes;
 pub mod lrc;
 pub mod lrclib;

@@ -9,6 +9,7 @@ use crate::history::{load_history_packages, push_history, PlayQueue};
 use crate::lrclib::fetch_lyrics;
 use crate::settings::{AppSettings, Favorites};
 use crate::show::{build_timed_lines, start_show, PlayMode, ShowConfig, ShowHandle};
+use crate::stats::{Bookmarks, ListenStats};
 use crate::sync_sim::line_index_for_time;
 use crate::themes::{LightTheme, RepeatMode};
 use crate::title::is_youtube_url;
@@ -104,6 +105,14 @@ struct SongLightsGui {
     was_ended: bool,
     sleep_until: Option<Instant>,
     cache_label: String,
+    ab_a: Option<f64>,
+    ab_b: Option<f64>,
+    bookmarks: Bookmarks,
+    stats: ListenStats,
+    lyric_font: f32,
+    listen_tick: Instant,
+    prefetched: bool,
+    fade_on_stop: bool,
 }
 
 impl SongLightsGui {
@@ -175,6 +184,18 @@ impl SongLightsGui {
             was_ended: false,
             sleep_until: None,
             cache_label,
+            ab_a: None,
+            ab_b: None,
+            bookmarks: Bookmarks::load(),
+            stats: {
+                let mut s = ListenStats::load();
+                s.start_session();
+                s
+            },
+            lyric_font: 15.0,
+            listen_tick: Instant::now(),
+            prefetched: false,
+            fade_on_stop: true,
         }
     }
 
@@ -213,9 +234,19 @@ impl SongLightsGui {
 
     fn stop_show(&mut self) {
         if let Some(mut s) = self.show.take() {
-            s.stop();
+            if self.fade_on_stop && s.is_running() {
+                s.fade_stop();
+                // join in background via drop of remaining handle after brief wait
+                thread::spawn(move || {
+                    thread::sleep(Duration::from_millis(1400));
+                    drop(s);
+                });
+            } else {
+                s.stop();
+            }
         }
         self.was_ended = false;
+        self.prefetched = false;
         self.status = "Stopped".into();
     }
 
@@ -263,9 +294,13 @@ impl SongLightsGui {
                 let _ = h.set_speed(self.speed);
                 h.set_theme(self.theme);
                 h.set_brightness(self.brightness);
+                h.set_ab_loop(self.ab_a, self.ab_b);
                 self.status = format!("Playing — {}", self.song_label);
+                self.stats.record_play(&self.song_label);
                 self.show = Some(h);
                 self.was_ended = false;
+                self.prefetched = false;
+                self.listen_tick = Instant::now();
             }
             Err(e) => self.error_popup = Some(format!("Play failed: {e}")),
         }
@@ -529,6 +564,10 @@ impl SongLightsGui {
         let mut open = false;
         let mut mute = false;
         let mut fav = false;
+        let mut next = false;
+        let mut prev = false;
+        let mut intro = false;
+        let mut mark = false;
         ctx.input(|i| {
             if i.key_pressed(Key::Space) {
                 space = true;
@@ -548,9 +587,68 @@ impl SongLightsGui {
             if i.key_pressed(Key::F) && i.modifiers.matches_logically(Modifiers::CTRL) {
                 fav = true;
             }
+            if i.key_pressed(Key::N) {
+                next = true;
+            }
+            if i.key_pressed(Key::P) {
+                prev = true;
+            }
+            if i.key_pressed(Key::I) {
+                intro = true;
+            }
+            if i.key_pressed(Key::B) && i.modifiers.matches_logically(Modifiers::CTRL) {
+                mark = true;
+            }
         });
         let f11 = ctx.input(|i| i.key_pressed(Key::F11));
-        // Don't steal Space from text edits
+        // Drag-drop files / URLs
+        let dropped: Vec<String> = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .map(|f| {
+                    f.path
+                        .as_ref()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| f.name.clone())
+                })
+                .collect()
+        });
+        for d in dropped {
+            let d = d.trim().to_string();
+            if is_youtube_url(&d) {
+                self.url = d;
+                self.load_youtube();
+            } else {
+                let path = PathBuf::from(&d);
+                let ext = path
+                    .extension()
+                    .map(|e| e.to_string_lossy().to_lowercase())
+                    .unwrap_or_default();
+                if ext == "lrc" || ext == "txt" {
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        if ext == "lrc" || content.contains('[') {
+                            self.synced_lrc = Some(content.clone());
+                            self.lyrics_edit = crate::lyrics_match::clean_lyrics(&content);
+                        } else {
+                            self.synced_lrc = None;
+                            self.lyrics_edit = content;
+                        }
+                        self.song_label = path
+                            .file_name()
+                            .map(|s| s.to_string_lossy().to_string())
+                            .unwrap_or_default();
+                        self.timed_lines = build_timed_lines(
+                            &self.lyrics_edit,
+                            self.synced_lrc.as_deref(),
+                            self.duration_s,
+                        );
+                        self.status = format!("Dropped {}", self.song_label);
+                    }
+                }
+            }
+        }
+
         let focus_text = ctx.memory(|m| m.focused().is_some());
         if space && !focus_text {
             if self.show.is_some() {
@@ -580,6 +678,27 @@ impl SongLightsGui {
                 } else {
                     "Unmuted".into()
                 };
+            }
+        }
+        if next && !focus_text {
+            self.next_song();
+        }
+        if prev && !focus_text {
+            self.prev_song();
+        }
+        if intro && !focus_text {
+            if let Some(s) = &self.show {
+                if let Ok(t) = s.skip_intro() {
+                    self.status = format!("Skipped intro → {}", Self::fmt_time(t));
+                }
+            }
+        }
+        if mark && !focus_text {
+            if let Some(s) = &self.show {
+                let t = s.position_s();
+                self.bookmarks
+                    .add(&self.video_id, &self.song_label, t, "bookmark");
+                self.status = format!("Bookmark @ {}", Self::fmt_time(t));
             }
         }
         if fav && !self.video_id.is_empty() {
@@ -669,6 +788,7 @@ impl eframe::App for SongLightsGui {
             show.set_volume(self.volume);
             show.set_theme(self.theme);
             show.set_brightness(self.brightness);
+            show.set_ab_loop(self.ab_a, self.ab_b);
             let pos = show.position_s();
             let dur = self.duration_s.max(show.duration_s());
             if !self.scrubbing && dur > 0.0 {
@@ -676,6 +796,41 @@ impl eframe::App for SongLightsGui {
             }
             self.active_line =
                 line_index_for_time(&self.timed_lines, pos, self.offset as f64);
+            // Accrue listen stats every ~5s while playing
+            if show.is_running() && !show.is_paused() {
+                let elapsed = self.listen_tick.elapsed().as_secs_f64();
+                if elapsed >= 5.0 {
+                    self.stats.add_listen_secs(elapsed);
+                    self.listen_tick = Instant::now();
+                }
+                // Prefetch next audio when near end
+                if !self.prefetched && dur > 0.0 && pos > dur - 35.0 {
+                    self.prefetched = true;
+                    if let Some(idx) = self.queue.next_index(self.shuffle) {
+                        if let Some(pkg) = self.queue.songs.get(idx).cloned() {
+                            if let (Some(url), vid) = (
+                                if pkg.url.is_empty() {
+                                    None
+                                } else {
+                                    Some(pkg.url.clone())
+                                },
+                                pkg.video_id.clone(),
+                            ) {
+                                if !vid.is_empty() {
+                                    thread::spawn(move || {
+                                        let root = default_cache_root();
+                                        let _ = download_audio(
+                                            &url,
+                                            &vid,
+                                            &root.join("audio"),
+                                        );
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             if show.is_running() || show.is_paused() {
                 ctx.request_repaint_after(std::time::Duration::from_millis(40));
             }
@@ -823,10 +978,10 @@ impl eframe::App for SongLightsGui {
                 });
                 ui.label(
                     RichText::new(
-                        "Space=pause  ←/→=seek  M=mute  Ctrl+F=★  Ctrl+O=file  F11=karaoke",
+                        "Space pause · ←/→ seek · N/P next/prev · I skip intro · M mute · Ctrl+B bookmark · F11 karaoke · drop URL/LRC",
                     )
                     .color(DIM)
-                    .size(12.0),
+                    .size(11.5),
                 );
                 ui.add_space(8.0);
             }
@@ -1076,7 +1231,97 @@ impl eframe::App for SongLightsGui {
                         if ui.small_button("F11 Karaoke").clicked() {
                             self.fullscreen_karaoke = true;
                         }
+                        if ui.small_button("Skip intro").on_hover_text("I").clicked() {
+                            if let Some(s) = &self.show {
+                                if let Ok(t) = s.skip_intro() {
+                                    self.status =
+                                        format!("Skip intro → {}", Self::fmt_time(t));
+                                }
+                            }
+                        }
+                        if ui.small_button("−5s").clicked() {
+                            self.seek_rel(-5.0);
+                        }
+                        if ui.small_button("A⟷B").on_hover_text("Set A-B loop").clicked() {
+                            if let Some(s) = &self.show {
+                                let t = s.position_s();
+                                if self.ab_a.is_none() {
+                                    self.ab_a = Some(t);
+                                    self.status = format!("Loop A @ {}", Self::fmt_time(t));
+                                } else if self.ab_b.is_none() {
+                                    let a = self.ab_a.unwrap_or(0.0);
+                                    if t > a + 0.3 {
+                                        self.ab_b = Some(t);
+                                        s.set_ab_loop(self.ab_a, self.ab_b);
+                                        self.status = format!(
+                                            "Loop A-B {}–{}",
+                                            Self::fmt_time(a),
+                                            Self::fmt_time(t)
+                                        );
+                                    }
+                                } else {
+                                    self.ab_a = None;
+                                    self.ab_b = None;
+                                    s.clear_ab_loop();
+                                    self.status = "A-B loop cleared".into();
+                                }
+                            }
+                        }
+                        if ui.small_button("📌").on_hover_text("Bookmark Ctrl+B").clicked() {
+                            if let Some(s) = &self.show {
+                                let t = s.position_s();
+                                self.bookmarks.add(
+                                    &self.video_id,
+                                    &self.song_label,
+                                    t,
+                                    "mark",
+                                );
+                                self.status = format!("Bookmark @ {}", Self::fmt_time(t));
+                            }
+                        }
+                        if ui.small_button("Share").clicked() {
+                            let text = format!(
+                                "{} {}\n{}",
+                                self.song_label,
+                                if self.url.is_empty() {
+                                    String::new()
+                                } else {
+                                    self.url.clone()
+                                },
+                                self.stats.summary()
+                            );
+                            ui.output_mut(|o| o.copied_text = text);
+                            self.status = "Copied share text".into();
+                        }
+                        if ui.small_button("Export TXT").clicked() {
+                            if let Some(path) = rfd::FileDialog::new()
+                                .add_filter("Text", &["txt"])
+                                .set_file_name("lyrics.txt")
+                                .save_file()
+                            {
+                                if std::fs::write(&path, &self.lyrics_edit).is_ok() {
+                                    self.status = format!("Exported {}", path.display());
+                                }
+                            }
+                        }
                     });
+                    // Bookmarks for current song
+                    let marks = self.bookmarks.for_video(&self.video_id);
+                    if !marks.is_empty() {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new("Marks:").color(DIM).small());
+                            for m in marks {
+                                if ui
+                                    .small_button(format!("{} ({})", m.label, Self::fmt_time(m.t)))
+                                    .clicked()
+                                {
+                                    if let Some(s) = &self.show {
+                                        let _ = s.seek(m.t);
+                                    }
+                                }
+                            }
+                        });
+                    }
                 });
 
             if !self.mini_player {
@@ -1106,13 +1351,14 @@ impl eframe::App for SongLightsGui {
                                     {
                                         continue;
                                     }
-                                    let (color, size, strong) =
+                                    let base = self.lyric_font;
+                                let (color, size, strong) =
                                         if i as isize == self.active_line {
-                                            (ACCENT, 17.0, true)
+                                            (ACCENT, base + 3.0, true)
                                         } else if (i as isize) < self.active_line {
-                                            (PAST, 13.0, false)
+                                            (PAST, base - 1.0, false)
                                         } else {
-                                            (DIM, 14.0, false)
+                                            (DIM, base, false)
                                         };
                                     let mut rt =
                                         RichText::new(format!("  {}", ln.text)).color(color).size(size);
@@ -1247,6 +1493,14 @@ impl eframe::App for SongLightsGui {
                                     }
                                 });
                                 ui.horizontal(|ui| {
+                                    ui.label(RichText::new("Font").color(DIM));
+                                    ui.add(
+                                        egui::Slider::new(&mut self.lyric_font, 11.0..=24.0)
+                                            .show_value(false),
+                                    );
+                                    ui.checkbox(&mut self.fade_on_stop, "Fade stop");
+                                });
+                                ui.horizontal(|ui| {
                                     ui.label(
                                         RichText::new(&self.cache_label).color(DIM).small(),
                                     );
@@ -1270,6 +1524,11 @@ impl eframe::App for SongLightsGui {
                                         self.status = "Settings saved".into();
                                     }
                                 });
+                                ui.label(
+                                    RichText::new(self.stats.summary())
+                                        .color(DIM)
+                                        .small(),
+                                );
                             });
                         });
                     });

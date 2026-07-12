@@ -300,6 +300,28 @@ impl AudioPlayer {
         let cur = self.get_position_s();
         self.seek((cur + delta_s).max(0.0))
     }
+
+    /// Smooth volume fade then stop (blocking, ~duration_ms).
+    pub fn fade_out_and_stop(&self, duration_ms: u64) {
+        let steps = 20u64;
+        let step = duration_ms / steps.max(1);
+        let start_vol = {
+            let st = self.state.lock().unwrap();
+            if st.muted {
+                0.0
+            } else {
+                st.volume
+            }
+        };
+        for i in 0..steps {
+            let f = 1.0 - (i as f32 + 1.0) / steps as f32;
+            if let Some(sink) = self.sink.lock().unwrap().as_ref() {
+                sink.set_volume(start_vol * f);
+            }
+            std::thread::sleep(Duration::from_millis(step.max(1)));
+        }
+        self.stop();
+    }
 }
 
 impl Drop for AudioPlayer {
