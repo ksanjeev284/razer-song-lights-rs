@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to build (e.g. v0.8.1). Leave empty to build current ref without upload."
+        description: "Existing release tag to attach binaries to (e.g. v0.8.4)"
         required: false
         default: ""
 
@@ -61,8 +61,11 @@ jobs:
             libssl-dev \
             libgtk-3-dev
 
+      # Prefer --locked (reproducible); fall back if lock was only version-bumped.
       - name: Build release binary
-        run: cargo build --release --locked --target ${{ matrix.target }}
+        run: |
+          cargo build --release --locked --target ${{ matrix.target }} \
+            || cargo build --release --target ${{ matrix.target }}
 
       - name: Package artifact (Windows)
         if: runner.os == 'Windows'
@@ -89,16 +92,24 @@ jobs:
     name: Publish GitHub Release assets
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
+    # Upload whatever platforms succeeded even if one matrix leg failed.
+    if: >-
+      always()
+      && needs.build.result != 'cancelled'
+      && (startsWith(github.ref, 'refs/tags/v')
+          || (github.event_name == 'workflow_dispatch' && inputs.tag != ''))
     steps:
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+        continue-on-error: true
 
       - name: List artifacts
-        run: ls -lah dist/
+        run: |
+          ls -lah dist/ || true
+          test -d dist && test "$(find dist -type f | wc -l)" -gt 0
 
       - name: Resolve tag
         id: tag

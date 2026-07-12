@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.8.4] — 2026-07-12
+
+### Fixes
+- **Release builds**: refresh `Cargo.lock` so `cargo build --locked` succeeds on CI
+- Release workflow falls back without `--locked` and publishes whatever platforms succeed
+
 ## [0.8.3] — 2026-07-12
 
 ### Fixes

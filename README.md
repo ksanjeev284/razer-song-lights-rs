@@ -2,7 +2,7 @@
 
 **Full Razer Song Lights app in Rust** — GUI + CLI + Chroma lights.
 
-**v0.8.3** — Multi-platform binaries (Windows / macOS / Linux) + Send-safe audio for macOS.
+**v0.8.4** — Multi-platform binaries (Windows / macOS / Linux). CI + release lockfile fixed.
 
 https://github.com/ksanjeev284/razer-song-lights-rs
 
