@@ -12,10 +12,9 @@ Pre-built binaries on the [Releases](https://github.com/ksanjeev284/razer-song-l
 
 | Platform | Asset |
 |----------|--------|
-| Windows x64 | `razer-song-lights-windows-x64.exe` |
-| Linux x64 | `razer-song-lights-linux-x64` |
-| macOS Apple Silicon | `razer-song-lights-macos-arm64` |
-| macOS Intel | `razer-song-lights-macos-x64` |
+| Windows x64 | [`razer-song-lights-windows-x64.exe`](https://github.com/ksanjeev284/razer-song-lights-rs/releases/download/v0.8.4/razer-song-lights-windows-x64.exe) |
+| Linux x64 | [`razer-song-lights-linux-x64`](https://github.com/ksanjeev284/razer-song-lights-rs/releases/download/v0.8.4/razer-song-lights-linux-x64) |
+| macOS Apple Silicon | [`razer-song-lights-macos-arm64`](https://github.com/ksanjeev284/razer-song-lights-rs/releases/download/v0.8.4/razer-song-lights-macos-arm64) |
 
 ```bash
 # Or build from source
