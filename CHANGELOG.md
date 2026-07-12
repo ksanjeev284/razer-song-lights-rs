@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.12.0] — unreleased
+
+### Features
+- **Strobe / Sparkle** ambient light modes
+- **Jump to chorus** (heuristic from lyric gaps)
+- **Restart track** (seek 0)
+- **End-of-song fade** (last ~5s)
+- **Pause on unfocus**
+- **Mute → dim lights**
+- **Queue dedupe + A–Z sort**
+- **Paste lyrics** from clipboard
+- **Export song pack** JSON
+- **Daily listen goal** progress + session timer
+
+No GitHub release — master only.
+
+---
+
 ## [0.11.0] — unreleased
 
 ### Features (inspired by karaoke / Musixmatch / streamer tools)

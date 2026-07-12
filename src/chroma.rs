@@ -200,6 +200,46 @@ impl ChromaKeyboard {
         self.push()
     }
 
+    /// Hard strobe flash (club mode).
+    pub fn ambient_strobe(
+        &mut self,
+        phase: f64,
+        color: u32,
+        strength: f32,
+    ) -> Result<(), ChromaError> {
+        let on = (phase * 8.0).sin() > 0.15;
+        if on {
+            let c = Self::dim_color(color, strength.clamp(0.2, 1.0));
+            self.clear(c);
+        } else {
+            self.clear(0);
+        }
+        self.push()
+    }
+
+    /// Random sparkle keys (seeded by phase).
+    pub fn ambient_sparkle(
+        &mut self,
+        phase: f64,
+        color: u32,
+        strength: f32,
+    ) -> Result<(), ChromaError> {
+        self.clear(0);
+        let s = strength.clamp(0.1, 1.0);
+        // Deterministic pseudo-random from phase
+        let mut seed = (phase * 1000.0) as u64;
+        for r in 0..MAX_ROW {
+            for c in 0..MAX_COL {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                if (seed >> 33) % 11 == 0 {
+                    let f = 0.35 + ((seed >> 20) % 50) as f32 / 100.0;
+                    self.set_key(r, c, Self::dim_color(color, f * s));
+                }
+            }
+        }
+        self.push()
+    }
+
     /// Expanding ring from center. `mirror` offsets center horizontally.
     pub fn ambient_ripple(
         &mut self,

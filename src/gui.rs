@@ -6,7 +6,7 @@ use crate::cache::{
 };
 use crate::chroma::{is_chroma_supported, ChromaKeyboard};
 use crate::history::{load_history_packages, push_history, PlayQueue};
-use crate::lrc::{lines_to_timed_words, lrc_quality_score, TimedWord};
+use crate::lrc::{chorus_time_s, lines_to_timed_words, lrc_quality_score, TimedWord};
 use crate::lrclib::fetch_lyrics;
 use crate::playlists::{timed_lines_to_lrc, PlaylistStore};
 use crate::settings::{AppSettings, Favorites};
@@ -183,6 +183,12 @@ struct SongLightsGui {
     last_np_write: Instant,
     preroll_until: Option<Instant>,
     visualizer_phase: f32,
+    end_fade: bool,
+    pause_on_unfocus: bool,
+    mute_lights_with_audio: bool,
+    session_start: Instant,
+    was_focused: bool,
+    end_fading: bool,
 }
 
 impl SongLightsGui {
@@ -310,6 +316,12 @@ impl SongLightsGui {
             last_np_write: Instant::now(),
             preroll_until: None,
             visualizer_phase: 0.0,
+            end_fade: settings.end_fade,
+            pause_on_unfocus: settings.pause_on_unfocus,
+            mute_lights_with_audio: settings.mute_lights_with_audio,
+            session_start: Instant::now(),
+            was_focused: true,
+            end_fading: false,
         }
     }
 
@@ -363,6 +375,9 @@ impl SongLightsGui {
             show_upcoming: self.show_upcoming,
             party_mode: self.party_mode,
             preroll_countdown: self.preroll_countdown,
+            end_fade: self.end_fade,
+            pause_on_unfocus: self.pause_on_unfocus,
+            mute_lights_with_audio: self.mute_lights_with_audio,
             ..AppSettings::default()
         };
         s.set_play_mode(self.mode);
@@ -581,6 +596,7 @@ impl SongLightsGui {
                 self.show = Some(h);
                 self.was_ended = false;
                 self.prefetched = false;
+                self.end_fading = false;
                 self.listen_tick = Instant::now();
             }
             Err(e) => self.error_popup = Some(format!("Play failed: {e}")),
@@ -679,6 +695,75 @@ impl SongLightsGui {
             word
         );
         let _ = std::fs::write(root.join("now_playing.txt"), body);
+    }
+
+    fn jump_to_chorus(&mut self) {
+        let t = chorus_time_s(&self.timed_lines, self.duration_s);
+        if let Some(s) = &self.show {
+            let _ = s.seek((t + self.offset as f64).max(0.0));
+            self.status = format!("Jump chorus ~ {}", Self::fmt_time(t));
+        } else {
+            self.status = "Start playback to jump to chorus".into();
+        }
+    }
+
+    fn restart_track(&mut self) {
+        if let Some(s) = &self.show {
+            let _ = s.seek(0.0);
+            self.end_fading = false;
+            s.set_volume(self.volume);
+            self.status = "Restarted track".into();
+        } else {
+            self.start_current();
+        }
+    }
+
+    fn import_lyrics_clipboard(&mut self) {
+        if let Some(t) = read_clipboard_text() {
+            let t = t.trim().to_string();
+            if t.is_empty() {
+                return;
+            }
+            if t.contains('[') {
+                self.synced_lrc = Some(t.clone());
+                self.lyrics_edit = crate::lyrics_match::clean_lyrics(&t);
+            } else {
+                self.synced_lrc = None;
+                self.lyrics_edit = t;
+            }
+            self.timed_lines = build_timed_lines(
+                &self.lyrics_edit,
+                self.synced_lrc.as_deref(),
+                self.duration_s,
+            );
+            self.timed_words = lines_to_timed_words(&self.timed_lines, self.duration_s);
+            self.status = "Imported lyrics from clipboard".into();
+        }
+    }
+
+    fn export_song_package_json(&mut self) {
+        let pkg = serde_json::json!({
+            "title": self.song_label,
+            "url": self.url,
+            "video_id": self.video_id,
+            "duration_s": self.duration_s,
+            "lyrics": self.lyrics_edit,
+            "synced_lrc": self.synced_lrc,
+            "dual_lyrics": self.dual_lyrics,
+            "note": self.song_note,
+            "offset": self.offset,
+        });
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("JSON", &["json"])
+            .set_file_name("song_package.json")
+            .save_file()
+        {
+            if let Ok(data) = serde_json::to_string_pretty(&pkg) {
+                if std::fs::write(&path, data).is_ok() {
+                    self.status = format!("Exported {}", path.display());
+                }
+            }
+        }
     }
 
     fn loop_current_line(&mut self) {
@@ -1459,6 +1544,46 @@ impl eframe::App for SongLightsGui {
         if self.fading_show.is_some() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
+        // Pause when window loses focus (optional)
+        let focused = ctx.input(|i| i.focused);
+        if self.pause_on_unfocus {
+            if self.was_focused && !focused {
+                if let Some(s) = &self.show {
+                    if s.is_running() && !s.is_paused() {
+                        s.pause();
+                        self.status = "Paused (window unfocused)".into();
+                    }
+                }
+            }
+            self.was_focused = focused;
+        }
+
+        // End-of-track volume fade (last ~5s)
+        if self.end_fade {
+            if let Some(show) = &self.show {
+                if show.is_running() && !show.is_paused() && self.duration_s > 15.0 {
+                    let left = self.duration_s - show.position_s();
+                    if left < 5.0 && left > 0.0 {
+                        self.end_fading = true;
+                        let f = (left / 5.0).clamp(0.0, 1.0) as f32;
+                        show.set_volume(self.volume * f);
+                    } else if self.end_fading && left >= 5.0 {
+                        self.end_fading = false;
+                        show.set_volume(self.volume);
+                    }
+                }
+            }
+        }
+
+        // Dim lights when muted
+        if self.mute_lights_with_audio {
+            if let Some(show) = &self.show {
+                if show.is_muted() {
+                    show.set_brightness(self.effective_brightness() * 0.15);
+                }
+            }
+        }
+
         // Pre-roll 3-2-1 countdown (karaoke practice)
         if let Some(until) = self.preroll_until {
             let left = until
@@ -1544,7 +1669,7 @@ impl eframe::App for SongLightsGui {
                 .unwrap_or(false)
                 && self.sleep_fade;
             let fading_in = self.fade_in_until.is_some();
-            if !sleep_fading && !fading_in {
+            if !sleep_fading && !fading_in && !self.end_fading {
                 show.set_volume(self.volume);
             }
             show.set_theme(self.theme);
@@ -1742,6 +1867,24 @@ impl eframe::App for SongLightsGui {
                         }
                         if ui.small_button("▼").on_hover_text("Move down").clicked() {
                             self.queue.move_current_down();
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        if ui
+                            .small_button("Dedupe")
+                            .on_hover_text("Remove duplicates")
+                            .clicked()
+                        {
+                            self.queue.dedupe();
+                            self.status = "Queue deduped".into();
+                        }
+                        if ui
+                            .small_button("A–Z")
+                            .on_hover_text("Sort by name")
+                            .clicked()
+                        {
+                            self.queue.sort_by_name();
+                            self.status = "Queue sorted A–Z".into();
                         }
                     });
                     ui.horizontal(|ui| {
@@ -2433,6 +2576,34 @@ impl eframe::App for SongLightsGui {
                         {
                             self.loop_current_line();
                         }
+                        if ui
+                            .small_button("Chorus")
+                            .on_hover_text("Jump near chorus (heuristic)")
+                            .clicked()
+                        {
+                            self.jump_to_chorus();
+                        }
+                        if ui
+                            .small_button("Restart")
+                            .on_hover_text("Seek to 0:00")
+                            .clicked()
+                        {
+                            self.restart_track();
+                        }
+                        if ui
+                            .small_button("Paste lyrics")
+                            .on_hover_text("Import lyrics/LRC from clipboard")
+                            .clicked()
+                        {
+                            self.import_lyrics_clipboard();
+                        }
+                        if ui
+                            .small_button("Export pack")
+                            .on_hover_text("JSON song package")
+                            .clicked()
+                        {
+                            self.export_song_package_json();
+                        }
                         if ui.small_button("−30s").clicked() {
                             self.seek_rel(-30.0);
                         }
@@ -2886,6 +3057,9 @@ impl eframe::App for SongLightsGui {
                                     ui.checkbox(&mut self.show_upcoming, "Upcoming");
                                     ui.checkbox(&mut self.now_playing_file, "OBS now_playing");
                                     ui.checkbox(&mut self.preroll_countdown, "3-2-1 countdown");
+                                    ui.checkbox(&mut self.end_fade, "End fade");
+                                    ui.checkbox(&mut self.pause_on_unfocus, "Pause unfocus");
+                                    ui.checkbox(&mut self.mute_lights_with_audio, "Mute→dim lights");
                                 });
                                 ui.horizontal(|ui| {
                                     ui.label(RichText::new("Vol preset").color(DIM).small());
@@ -3005,6 +3179,25 @@ impl eframe::App for SongLightsGui {
                                     RichText::new(self.stats.summary())
                                         .color(DIM)
                                         .small(),
+                                );
+                                let sess = self.session_start.elapsed().as_secs();
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{} · session {:02}:{:02}",
+                                        self.stats.daily_summary(),
+                                        sess / 60,
+                                        sess % 60
+                                    ))
+                                    .color(DIM)
+                                    .small(),
+                                );
+                                let (day_h, goal) = self.stats.daily_progress();
+                                ui.add(
+                                    egui::ProgressBar::new(
+                                        (day_h / goal as f64).clamp(0.0, 1.0) as f32,
+                                    )
+                                    .desired_width(180.0)
+                                    .text(format!("day goal {:.0}%", (day_h / goal as f64) * 100.0)),
                                 );
                             });
                         });

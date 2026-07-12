@@ -12,6 +12,32 @@ pub struct TimedLine {
     pub end_t: f64,
 }
 
+/// Heuristic "chorus" time: largest gap between lines (entry after intro), else ~40%.
+pub fn chorus_time_s(lines: &[TimedLine], duration_s: f64) -> f64 {
+    if lines.len() < 3 {
+        return (duration_s * 0.4).max(0.0);
+    }
+    // Ignore pure intro: require the *next* line to start after ~15% of song.
+    let start_gate = (duration_s * 0.15).max(8.0);
+    let mut best_t = lines[lines.len() / 3].t;
+    let mut best_gap = 0.0_f64;
+    for w in lines.windows(2) {
+        if w[1].t < start_gate {
+            continue;
+        }
+        let gap = w[1].t - w[0].t;
+        if gap > best_gap {
+            best_gap = gap;
+            best_t = w[1].t;
+        }
+    }
+    if best_gap < 1.5 {
+        (duration_s * 0.4).max(0.0)
+    } else {
+        best_t
+    }
+}
+
 /// Per-word event expanded from a timed line.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TimedWord {
@@ -240,6 +266,34 @@ mod tests {
         assert_eq!(words.len(), 2);
         assert_eq!(words[0].word, "hello");
         assert!(words[1].t > words[0].t);
+    }
+
+    #[test]
+    fn chorus_heuristic() {
+        let lines = vec![
+            TimedLine {
+                t: 10.0,
+                text: "a".into(),
+                end_t: 12.0,
+            },
+            TimedLine {
+                t: 14.0,
+                text: "b".into(),
+                end_t: 16.0,
+            },
+            TimedLine {
+                t: 30.0,
+                text: "chorus".into(),
+                end_t: 34.0,
+            },
+            TimedLine {
+                t: 36.0,
+                text: "d".into(),
+                end_t: 40.0,
+            },
+        ];
+        let t = chorus_time_s(&lines, 100.0);
+        assert!((t - 30.0).abs() < 0.01);
     }
 
     #[test]

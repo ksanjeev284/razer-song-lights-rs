@@ -13,6 +13,34 @@ pub struct ListenStats {
     pub total_listen_secs: f64,
     pub last_played: String,
     pub sessions: u64,
+    /// YYYY-MM-DD of last daily bucket.
+    #[serde(default)]
+    pub day_key: String,
+    /// Seconds listened on `day_key`.
+    #[serde(default)]
+    pub day_listen_secs: f64,
+    /// Daily goal in hours (0 = off).
+    #[serde(default = "default_goal_hours")]
+    pub daily_goal_hours: f32,
+}
+
+fn default_goal_hours() -> f32 {
+    1.0
+}
+
+fn today_key() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // Approximate UTC date; good enough for a soft daily goal.
+    let days = secs / 86400;
+    let y = 1970 + days / 365;
+    let rem = days % 365;
+    let m = rem / 30 + 1;
+    let d = rem % 30 + 1;
+    format!("{y:04}-{m:02}-{d:02}")
 }
 
 impl ListenStats {
@@ -46,8 +74,33 @@ impl ListenStats {
     pub fn add_listen_secs(&mut self, secs: f64) {
         if secs > 0.0 && secs < 3600.0 * 4.0 {
             self.total_listen_secs += secs;
+            let today = today_key();
+            if self.day_key != today {
+                self.day_key = today;
+                self.day_listen_secs = 0.0;
+            }
+            self.day_listen_secs += secs;
             self.save();
         }
+    }
+
+    pub fn daily_progress(&self) -> (f64, f32) {
+        let goal_h = if self.daily_goal_hours <= 0.0 {
+            1.0
+        } else {
+            self.daily_goal_hours
+        };
+        let day = if self.day_key == today_key() {
+            self.day_listen_secs
+        } else {
+            0.0
+        };
+        (day / 3600.0, goal_h)
+    }
+
+    pub fn daily_summary(&self) -> String {
+        let (h, goal) = self.daily_progress();
+        format!("Today {:.1}h / {goal:.1}h goal", h)
     }
 
     pub fn start_session(&mut self) {

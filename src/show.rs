@@ -643,6 +643,12 @@ fn run_engine(
                     AmbientEffect::Ripple => {
                         let _ = kb.ambient_ripple(phase, color, strength, mirror);
                     }
+                    AmbientEffect::Strobe => {
+                        let _ = kb.ambient_strobe(phase, color, strength);
+                    }
+                    AmbientEffect::Sparkle => {
+                        let _ = kb.ambient_sparkle(phase, color, strength);
+                    }
                 }
                 last_ambient = std::time::Instant::now();
             }

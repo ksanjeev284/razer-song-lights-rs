@@ -89,6 +89,15 @@ pub struct AppSettings {
     /// 3-2-1 countdown before first lyric on fresh play.
     #[serde(default)]
     pub preroll_countdown: bool,
+    /// Fade volume in the last few seconds of a track.
+    #[serde(default = "default_true")]
+    pub end_fade: bool,
+    /// Pause when the window loses focus.
+    #[serde(default)]
+    pub pause_on_unfocus: bool,
+    /// Dim keyboard lights when audio is muted.
+    #[serde(default = "default_true")]
+    pub mute_lights_with_audio: bool,
 }
 
 fn default_cookies_browser() -> String {
@@ -145,6 +154,9 @@ impl Default for AppSettings {
             show_upcoming: true,
             party_mode: false,
             preroll_countdown: false,
+            end_fade: true,
+            pause_on_unfocus: false,
+            mute_lights_with_audio: true,
         }
     }
 }

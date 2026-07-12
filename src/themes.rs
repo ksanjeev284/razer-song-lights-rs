@@ -61,15 +61,19 @@ pub enum AmbientEffect {
     Wave,
     Breath,
     Ripple,
+    Strobe,
+    Sparkle,
     Off,
 }
 
 impl AmbientEffect {
-    pub const ALL: [AmbientEffect; 5] = [
+    pub const ALL: [AmbientEffect; 7] = [
         AmbientEffect::Pulse,
         AmbientEffect::Wave,
         AmbientEffect::Breath,
         AmbientEffect::Ripple,
+        AmbientEffect::Strobe,
+        AmbientEffect::Sparkle,
         AmbientEffect::Off,
     ];
 
@@ -79,6 +83,8 @@ impl AmbientEffect {
             AmbientEffect::Wave => "Wave",
             AmbientEffect::Breath => "Breath",
             AmbientEffect::Ripple => "Ripple",
+            AmbientEffect::Strobe => "Strobe",
+            AmbientEffect::Sparkle => "Sparkle",
             AmbientEffect::Off => "Off",
         }
     }

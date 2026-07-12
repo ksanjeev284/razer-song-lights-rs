@@ -199,6 +199,48 @@ impl PlayQueue {
         self.next_index(true)
     }
 
+    /// Remove duplicate video_ids (keeps first occurrence).
+    pub fn dedupe(&mut self) {
+        let mut seen = std::collections::HashSet::new();
+        let cur_id = self.current().map(|s| s.video_id.clone());
+        self.songs.retain(|s| {
+            if s.video_id.is_empty() {
+                return true;
+            }
+            seen.insert(s.video_id.clone())
+        });
+        if let Some(id) = cur_id {
+            self.index = self
+                .songs
+                .iter()
+                .position(|s| s.video_id == id)
+                .map(|i| i as isize)
+                .unwrap_or(if self.songs.is_empty() { -1 } else { 0 });
+        } else if self.songs.is_empty() {
+            self.index = -1;
+        } else if self.index as usize >= self.songs.len() {
+            self.index = self.songs.len() as isize - 1;
+        }
+    }
+
+    /// Sort by display name A–Z.
+    pub fn sort_by_name(&mut self) {
+        let cur_id = self.current().map(|s| s.video_id.clone());
+        self.songs.sort_by(|a, b| {
+            a.display_name()
+                .to_lowercase()
+                .cmp(&b.display_name().to_lowercase())
+        });
+        if let Some(id) = cur_id {
+            self.index = self
+                .songs
+                .iter()
+                .position(|s| s.video_id == id)
+                .map(|i| i as isize)
+                .unwrap_or(0);
+        }
+    }
+
     /// Next index, optionally shuffled (not current).
     pub fn next_index(&self, shuffle: bool) -> Option<usize> {
         if self.songs.is_empty() {
@@ -275,6 +317,17 @@ mod tests {
         q.move_current_to_top();
         assert_eq!(q.index, 0);
         assert_eq!(q.songs[0].track, "Three");
+    }
+
+    #[test]
+    fn dedupe_queue() {
+        let mut q = PlayQueue::default();
+        q.push(sample("aaa111", "One"));
+        q.songs.push(sample("aaa111", "One again"));
+        q.songs.push(sample("bbb222", "Two"));
+        q.index = 2;
+        q.dedupe();
+        assert_eq!(q.songs.len(), 2);
     }
 
     #[test]
