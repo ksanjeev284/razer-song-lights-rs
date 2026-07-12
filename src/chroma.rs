@@ -107,15 +107,20 @@ impl ChromaKeyboard {
     }
 
     /// Soft ambient wash across a band of keys (between lyric events).
+    /// `mirror` flips left↔right.
     pub fn ambient_pulse(
         &mut self,
         phase: f64,
         color: u32,
         strength: f32,
+        mirror: bool,
     ) -> Result<(), ChromaError> {
         self.clear(0);
         let s = strength.clamp(0.05, 1.0);
-        let col = ((phase * MAX_COL as f64) as usize) % MAX_COL;
+        let mut col = ((phase * MAX_COL as f64) as usize) % MAX_COL;
+        if mirror {
+            col = MAX_COL.saturating_sub(1).saturating_sub(col);
+        }
         for r in 0..MAX_ROW {
             for c in 0..MAX_COL {
                 let dist = (c as i32 - col as i32).unsigned_abs() as f32;
@@ -134,12 +139,16 @@ impl ChromaKeyboard {
         phase: f64,
         color: u32,
         strength: f32,
+        mirror: bool,
     ) -> Result<(), ChromaError> {
         self.clear(0);
         let s = strength.clamp(0.05, 1.0);
         for r in 0..MAX_ROW {
             for c in 0..MAX_COL {
-                let x = c as f64 / MAX_COL as f64;
+                let mut x = c as f64 / MAX_COL as f64;
+                if mirror {
+                    x = 1.0 - x;
+                }
                 let wave = ((x * std::f64::consts::TAU * 1.5 + phase * 2.2).sin() + 1.0) * 0.5;
                 let f = (wave as f32) * s * 0.5;
                 if f > 0.06 {
@@ -170,16 +179,20 @@ impl ChromaKeyboard {
         self.push()
     }
 
-    /// Expanding ring from center.
+    /// Expanding ring from center. `mirror` offsets center horizontally.
     pub fn ambient_ripple(
         &mut self,
         phase: f64,
         color: u32,
         strength: f32,
+        mirror: bool,
     ) -> Result<(), ChromaError> {
         self.clear(0);
         let s = strength.clamp(0.05, 1.0);
-        let cx = (MAX_COL as f64 - 1.0) / 2.0;
+        let mut cx = (MAX_COL as f64 - 1.0) / 2.0;
+        if mirror {
+            cx = (MAX_COL as f64 - 1.0) * 0.35;
+        }
         let cy = (MAX_ROW as f64 - 1.0) / 2.0;
         let radius = (phase * 0.9).rem_euclid(1.0) * (cx.max(cy) + 2.0);
         for r in 0..MAX_ROW {

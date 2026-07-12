@@ -56,6 +56,12 @@ pub struct AppSettings {
     /// Browser for `--cookies-from-browser` (chrome|edge|firefox|brave|none).
     #[serde(default = "default_cookies_browser")]
     pub ytdlp_cookies_browser: String,
+    /// Dim lights automatically 22:00–07:00 local time.
+    #[serde(default)]
+    pub auto_night_dim: bool,
+    /// Mirror ambient light direction.
+    #[serde(default)]
+    pub mirror_lights: bool,
 }
 
 fn default_cookies_browser() -> String {
@@ -101,6 +107,8 @@ impl Default for AppSettings {
             seek_snap: false,
             ytdlp_cookies_file: String::new(),
             ytdlp_cookies_browser: default_cookies_browser(),
+            auto_night_dim: false,
+            mirror_lights: false,
         }
     }
 }

@@ -2,7 +2,7 @@
 
 **Full Razer Song Lights app in Rust** — GUI + CLI + Chroma lights.
 
-**v0.8.4** — Multi-platform binaries (Windows / macOS / Linux). CI + release lockfile fixed.
+**v0.9.0** — YouTube search, lyric progress bar, queue tools, auto night dim, mirror FX.
 
 https://github.com/ksanjeev284/razer-song-lights-rs
 
@@ -12,47 +12,32 @@ Pre-built binaries on the [Releases](https://github.com/ksanjeev284/razer-song-l
 
 | Platform | Asset |
 |----------|--------|
-| Windows x64 | [`razer-song-lights-windows-x64.exe`](https://github.com/ksanjeev284/razer-song-lights-rs/releases/download/v0.8.4/razer-song-lights-windows-x64.exe) |
-| Linux x64 | [`razer-song-lights-linux-x64`](https://github.com/ksanjeev284/razer-song-lights-rs/releases/download/v0.8.4/razer-song-lights-linux-x64) |
-| macOS Apple Silicon | [`razer-song-lights-macos-arm64`](https://github.com/ksanjeev284/razer-song-lights-rs/releases/download/v0.8.4/razer-song-lights-macos-arm64) |
+| Windows x64 | [`razer-song-lights-windows-x64.exe`](https://github.com/ksanjeev284/razer-song-lights-rs/releases/download/v0.9.0/razer-song-lights-windows-x64.exe) |
+| Linux x64 | [`razer-song-lights-linux-x64`](https://github.com/ksanjeev284/razer-song-lights-rs/releases/download/v0.9.0/razer-song-lights-linux-x64) |
+| macOS Apple Silicon | [`razer-song-lights-macos-arm64`](https://github.com/ksanjeev284/razer-song-lights-rs/releases/download/v0.9.0/razer-song-lights-macos-arm64) |
 
 ```bash
-# Or build from source
 cargo run --release
 ```
 
-**Notes:** Razer Chroma keyboard lights require Windows + Razer Synapse. Audio/lyrics work on all platforms. Linux needs `yt-dlp` on `PATH` for YouTube.
-
-### YouTube “Please sign in” / bot check
-
-YouTube often blocks anonymous downloads. The app supports yt-dlp cookies:
-
-1. **Easiest (Windows):** in the app set **YT cookies → chrome** or **edge** (stay logged into YouTube in that browser).
-2. **cookies.txt:** export Netscape cookies (browser extension “Get cookies.txt LOCALLY”) while on youtube.com, then **cookies.txt…** in the app — or put the file at  
-   `%LOCALAPPDATA%\razer-song-lights\youtube_cookies.txt`
-3. **Env vars:** `YTDLP_COOKIES=C:\path\cookies.txt` or `YTDLP_COOKIES_FROM_BROWSER=chrome`
-4. Keep yt-dlp updated: `pip install -U yt-dlp`
+**Notes:** Razer Chroma keyboard lights require Windows + Razer Synapse. Use **YT cookies → chrome/edge** if YouTube says “Please sign in”. Keep `yt-dlp` updated: `pip install -U yt-dlp`.
 
 ---
 
-## Highlights (v0.8)
+## Highlights (v0.9)
 
 | Feature | |
 |--------|--|
-| **Named playlists** | Save / load queue as named lists in Library |
-| **Ambient FX** | Pulse · Wave · Breath · Ripple · Off |
-| **Snap to lyric** | `S` jumps to nearest timed line |
-| **Jump %** | Keys `1`–`9` → 10%–90%; buttons 25/50/75% |
-| **Offset nudge** | `[` / `]` ±0.1s for fine sync |
-| **Top played** | Ranked by per-song play count |
-| **Sleep fade** | Volume ramps down before sleep stop |
-| **Paste URL** | One-click clipboard paste into YouTube field |
-| **Export timed LRC** | Write current timed lines (synced or estimated) |
-| **Clear queue** | Empty history/queue from Library |
+| **YouTube search** | Type a query → Find → click result to play |
+| **Lyric progress bar** | Fill % through the current line |
+| **Replay line** | `R` or button — jump to start of current lyric |
+| **Seek ±30s** | Shift+←/→ or −30s/+30s buttons |
+| **Auto night dim** | Dim lights 22:00–07:00 local |
+| **Mirror FX** | Flip ambient light direction |
+| **Shuffle queue / ↑ Top** | Library queue tools |
+| **Export stats CSV** | Listen stats download |
 
-Plus v0.7: resume position, remember offset, ambient pulse, night dim, crossfade next, M3U import/export, LRC quality badge, next-line countdown, F1 help, volume presets.
-
-Plus v0.6: A-B loop, bookmarks, skip intro, fade stop, drag-drop, stats, prefetch, etc.
+Plus cookies fix (v0.8.5), playlists, ambient FX, A-B loop, karaoke F11, etc.
 
 ### Shortcuts
 
@@ -60,15 +45,16 @@ Plus v0.6: A-B loop, bookmarks, skip intro, fade stop, drag-drop, stats, prefetc
 |-----|--------|
 | Space | Pause / resume |
 | ← → | Seek ±10s |
+| Shift+←/→ | Seek ±30s |
 | N / P | Next / prev |
+| R | Replay current lyric line |
+| S | Snap to nearest lyric |
 | I | Skip intro |
 | M | Mute |
-| S | Snap to nearest lyric |
 | 1–9 | Jump to 10%–90% |
 | [ / ] | Offset −0.1s / +0.1s |
 | Ctrl+B | Bookmark |
 | Ctrl+F | Favorite |
-| Ctrl+O | Open file |
 | F11 | Fullscreen karaoke |
 | F1 | Help |
 
@@ -77,7 +63,7 @@ Plus v0.6: A-B loop, bookmarks, skip intro, fade stop, drag-drop, stats, prefetc
 ## Tests
 
 ```bash
-cargo test   # 45 offline tests
+cargo test   # 50 offline tests
 ```
 
 ---

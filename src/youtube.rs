@@ -408,6 +408,121 @@ fn find_downloaded(out_dir: &Path, video_id: &str) -> Option<PathBuf> {
 /// Browser options shown in the GUI.
 pub const COOKIE_BROWSERS: &[&str] = &["none", "chrome", "edge", "firefox", "brave", "chromium"];
 
+/// One row from `ytsearchN:query` flat-playlist dump.
+#[derive(Debug, Clone)]
+pub struct SearchHit {
+    pub video_id: String,
+    pub title: String,
+    pub channel: String,
+    pub duration_s: f64,
+    pub url: String,
+}
+
+impl SearchHit {
+    pub fn label(&self) -> String {
+        let dur = if self.duration_s > 0.0 {
+            let s = self.duration_s as i64;
+            format!(" · {}:{:02}", s / 60, s % 60)
+        } else {
+            String::new()
+        };
+        if self.channel.is_empty() {
+            format!("{}{dur}", self.title)
+        } else {
+            format!("{} — {}{dur}", self.title, self.channel)
+        }
+    }
+}
+
+/// Search YouTube via yt-dlp (`ytsearchN:query`). Does not download media.
+pub fn search_youtube(
+    query: &str,
+    limit: usize,
+    auth: &YtdlpAuth,
+) -> Result<Vec<SearchHit>, YoutubeError> {
+    let q = query.trim();
+    if q.is_empty() {
+        return Ok(Vec::new());
+    }
+    let n = limit.clamp(1, 15);
+    let bin = ytdlp_bin()?;
+    let search = format!("ytsearch{n}:{q}");
+    let mut args = base_args(auth);
+    args.extend([
+        "--flat-playlist".into(),
+        "-J".into(),
+        "--skip-download".into(),
+        search,
+    ]);
+    let out = run_ytdlp(&bin, &args)?;
+    if !out.status.success() {
+        let msg = stderr_msg(&out);
+        if is_signin_error(&msg) {
+            return Err(YoutubeError::Ytdlp(format!(
+                "{msg}\n\n{}",
+                signin_help(auth)
+            )));
+        }
+        return Err(YoutubeError::Ytdlp(msg));
+    }
+    parse_search_json(&out.stdout)
+}
+
+fn parse_search_json(stdout: &[u8]) -> Result<Vec<SearchHit>, YoutubeError> {
+    #[derive(Deserialize)]
+    struct FlatEntry {
+        id: Option<String>,
+        title: Option<String>,
+        channel: Option<String>,
+        uploader: Option<String>,
+        duration: Option<f64>,
+        url: Option<String>,
+        webpage_url: Option<String>,
+    }
+    #[derive(Deserialize)]
+    struct FlatPlaylist {
+        entries: Option<Vec<Option<FlatEntry>>>,
+        // single-result edge case
+        id: Option<String>,
+        title: Option<String>,
+    }
+
+    let root: FlatPlaylist =
+        serde_json::from_slice(stdout).map_err(|e| YoutubeError::Json(e.to_string()))?;
+
+    let mut hits = Vec::new();
+    if let Some(entries) = root.entries {
+        for e in entries.into_iter().flatten() {
+            let id = e.id.unwrap_or_default();
+            if id.is_empty() {
+                continue;
+            }
+            let url = e
+                .webpage_url
+                .or(e.url)
+                .unwrap_or_else(|| format!("https://www.youtube.com/watch?v={id}"));
+            hits.push(SearchHit {
+                video_id: id,
+                title: e.title.unwrap_or_else(|| "Untitled".into()),
+                channel: e.channel.or(e.uploader).unwrap_or_default(),
+                duration_s: e.duration.unwrap_or(0.0),
+                url,
+            });
+        }
+    } else if let Some(id) = root.id {
+        if !id.is_empty() {
+            hits.push(SearchHit {
+                video_id: id.clone(),
+                title: root.title.unwrap_or_else(|| "Untitled".into()),
+                channel: String::new(),
+                duration_s: 0.0,
+                url: format!("https://www.youtube.com/watch?v={id}"),
+            });
+        }
+    }
+    Ok(hits)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,8 +542,22 @@ mod tests {
 
     #[test]
     fn auth_resolve_env() {
-        // just ensure default doesn't panic
         let a = YtdlpAuth::resolve(None, Some("chrome"));
         assert_eq!(a.cookies_from_browser.as_deref(), Some("chrome"));
+    }
+
+    #[test]
+    fn parse_search_entries() {
+        let j = br#"{
+          "entries": [
+            {"id":"abc123","title":"Song A","channel":"Artist","duration":200.0},
+            {"id":"def456","title":"Song B","uploader":"Band","duration":180.5},
+            null
+          ]
+        }"#;
+        let hits = parse_search_json(j).unwrap();
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].video_id, "abc123");
+        assert!(hits[0].label().contains("Song A"));
     }
 }

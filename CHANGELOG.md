@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.9.0] — 2026-07-13
+
+### Features
+- **YouTube search** via yt-dlp (`ytsearchN:`) with click-to-play results
+- **Lyric line progress bar** (0–100% through current line)
+- **Replay line** (`R` + button)
+- **Seek ±30s** (Shift+arrows + buttons)
+- **Auto night dim** (22:00–07:00 local)
+- **Mirror ambient FX** (left↔right)
+- **Queue shuffle** + move current **to top**
+- **Export listen stats CSV**
+
+### Tests
+- 50 offline unit/integration tests
+
+---
+
 ## [0.8.5] — 2026-07-12
 
 ### Fixes

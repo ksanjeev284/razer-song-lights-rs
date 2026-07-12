@@ -34,6 +34,8 @@ pub struct ShowConfig {
     pub ambient_pulse: bool,
     /// Ambient effect style (Pulse / Wave / Breath / Ripple / Off)
     pub ambient_effect: AmbientEffect,
+    /// Mirror ambient left↔right
+    pub mirror_lights: bool,
 }
 
 impl Default for ShowConfig {
@@ -51,6 +53,7 @@ impl Default for ShowConfig {
             brightness: 1.0,
             ambient_pulse: true,
             ambient_effect: AmbientEffect::Pulse,
+            mirror_lights: false,
         }
     }
 }
@@ -71,6 +74,7 @@ pub struct ShowHandle {
     ab_b: Arc<std::sync::atomic::AtomicU64>,
     ambient: Arc<AtomicBool>,
     ambient_effect: Arc<std::sync::atomic::AtomicU8>,
+    mirror_lights: Arc<AtomicBool>,
 }
 
 impl ShowHandle {
@@ -250,6 +254,41 @@ impl ShowHandle {
         self.ambient.store(effect.is_on(), Ordering::Relaxed);
     }
 
+    pub fn set_mirror_lights(&self, on: bool) {
+        self.mirror_lights.store(on, Ordering::Relaxed);
+    }
+
+    /// Seek to start of current timed lyric line (replay line).
+    pub fn replay_line(&self) -> anyhow::Result<f64> {
+        let pos = self.position_s();
+        let off = self.offset();
+        let idx = line_index_for_time(&self.lines, pos, off);
+        if idx < 0 {
+            return self.seek(0.0);
+        }
+        let t = self.lines[idx as usize].t + off;
+        self.seek(t.max(0.0))
+    }
+
+    /// Progress 0..1 through the active lyric line.
+    pub fn line_progress(&self) -> f32 {
+        let pos = self.position_s();
+        let off = self.offset();
+        let idx = line_index_for_time(&self.lines, pos, off);
+        if idx < 0 {
+            return 0.0;
+        }
+        let i = idx as usize;
+        let start = self.lines[i].t + off;
+        let end = if i + 1 < self.lines.len() {
+            self.lines[i + 1].t + off
+        } else {
+            self.lines[i].end_t + off
+        };
+        let span = (end - start).max(0.05);
+        ((pos - start) / span).clamp(0.0, 1.0) as f32
+    }
+
     /// Seek to nearest timed lyric line.
     pub fn snap_to_lyric(&self) -> anyhow::Result<f64> {
         let pos = self.position_s() - self.offset();
@@ -352,6 +391,7 @@ fn start_show_with_stop(
     };
     let ambient = Arc::new(AtomicBool::new(effect.is_on()));
     let ambient_effect = Arc::new(std::sync::atomic::AtomicU8::new(effect.index()));
+    let mirror_lights = Arc::new(AtomicBool::new(cfg.mirror_lights));
     let ended = Arc::new(AtomicBool::new(false));
 
     let audio = if cfg.play_audio {
@@ -379,6 +419,7 @@ fn start_show_with_stop(
     let ab_b_t = ab_b.clone();
     let ambient_t = ambient.clone();
     let ambient_effect_t = ambient_effect.clone();
+    let mirror_t = mirror_lights.clone();
     let ended_thread = ended.clone();
     let duration = duration_s;
 
@@ -398,6 +439,7 @@ fn start_show_with_stop(
             ab_b_t,
             ambient_t,
             ambient_effect_t,
+            mirror_t,
             ended_thread,
         );
     });
@@ -416,6 +458,7 @@ fn start_show_with_stop(
         ab_b,
         ambient,
         ambient_effect,
+        mirror_lights,
     })
 }
 
@@ -435,6 +478,7 @@ fn run_engine(
     ab_b: Arc<std::sync::atomic::AtomicU64>,
     ambient: Arc<AtomicBool>,
     ambient_effect: Arc<std::sync::atomic::AtomicU8>,
+    mirror_lights: Arc<AtomicBool>,
     ended: Arc<AtomicBool>,
 ) {
     let mut chroma = if cfg.lights && crate::chroma::is_chroma_supported() {
@@ -584,19 +628,20 @@ fn run_engine(
                 let color = themed_color(th, (pos * 2.0) as usize, bright * 0.55);
                 let strength = bright * 0.5;
                 let phase = pos * 0.35;
+                let mirror = mirror_lights.load(Ordering::Relaxed);
                 match AmbientEffect::from_index(ambient_effect.load(Ordering::Relaxed)) {
                     AmbientEffect::Off => {}
                     AmbientEffect::Pulse => {
-                        let _ = kb.ambient_pulse(phase, color, strength);
+                        let _ = kb.ambient_pulse(phase, color, strength, mirror);
                     }
                     AmbientEffect::Wave => {
-                        let _ = kb.ambient_wave(phase, color, strength);
+                        let _ = kb.ambient_wave(phase, color, strength, mirror);
                     }
                     AmbientEffect::Breath => {
                         let _ = kb.ambient_breath(phase, color, strength);
                     }
                     AmbientEffect::Ripple => {
-                        let _ = kb.ambient_ripple(phase, color, strength);
+                        let _ = kb.ambient_ripple(phase, color, strength, mirror);
                     }
                 }
                 last_ambient = std::time::Instant::now();

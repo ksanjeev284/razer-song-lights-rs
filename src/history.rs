@@ -124,6 +124,47 @@ impl PlayQueue {
         self.index >= 0 && (self.index as usize) + 1 < self.songs.len()
     }
 
+    /// Fisher–Yates shuffle of the queue (keeps current song position if possible).
+    pub fn shuffle_in_place(&mut self) {
+        if self.songs.len() < 2 {
+            return;
+        }
+        let current_id = self.current().map(|s| s.video_id.clone());
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let n = self.songs.len();
+        for i in (1..n).rev() {
+            let mut h = DefaultHasher::new();
+            i.hash(&mut h);
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+                .hash(&mut h);
+            let j = (h.finish() as usize) % (i + 1);
+            self.songs.swap(i, j);
+        }
+        if let Some(id) = current_id {
+            if let Some(pos) = self.songs.iter().position(|s| s.video_id == id) {
+                self.index = pos as isize;
+            }
+        }
+    }
+
+    /// Move current song to front of queue.
+    pub fn move_current_to_top(&mut self) {
+        if self.index <= 0 || self.songs.is_empty() {
+            return;
+        }
+        let i = self.index as usize;
+        if i >= self.songs.len() {
+            return;
+        }
+        let song = self.songs.remove(i);
+        self.songs.insert(0, song);
+        self.index = 0;
+    }
+
     /// Next index, optionally shuffled (not current).
     pub fn next_index(&self, shuffle: bool) -> Option<usize> {
         if self.songs.is_empty() {
@@ -188,6 +229,18 @@ mod tests {
         assert!(q.can_next());
         q.next();
         assert_eq!(q.current().unwrap().track, "Two");
+    }
+
+    #[test]
+    fn move_to_top() {
+        let mut q = PlayQueue::default();
+        q.push(sample("aaa111", "One"));
+        q.push(sample("bbb222", "Two"));
+        q.push(sample("ccc333", "Three"));
+        assert_eq!(q.current().unwrap().track, "Three");
+        q.move_current_to_top();
+        assert_eq!(q.index, 0);
+        assert_eq!(q.songs[0].track, "Three");
     }
 
     #[test]

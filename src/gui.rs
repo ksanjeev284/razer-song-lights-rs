@@ -17,7 +17,8 @@ use crate::sync_sim::line_index_for_time;
 use crate::themes::{AmbientEffect, LightTheme, RepeatMode};
 use crate::title::is_youtube_url;
 use crate::youtube::{
-    download_audio_with_auth, extract_meta_with_auth, YtdlpAuth, COOKIE_BROWSERS,
+    download_audio_with_auth, extract_meta_with_auth, search_youtube, SearchHit, YtdlpAuth,
+    COOKIE_BROWSERS,
 };
 use crate::VERSION;
 use eframe::egui::{self, Color32, Key, Modifiers, RichText, ScrollArea, Sense, Vec2};
@@ -58,6 +59,7 @@ enum LoadMsg {
     Ok(SongPackage),
     Err(String),
     Status(String),
+    SearchOk(Vec<SearchHit>),
 }
 
 pub fn run_gui() -> eframe::Result<()> {
@@ -157,6 +159,11 @@ struct SongLightsGui {
     playlist_name: String,
     ytdlp_cookies_file: String,
     ytdlp_cookies_browser: String,
+    search_query: String,
+    search_hits: Vec<SearchHit>,
+    search_busy: bool,
+    auto_night_dim: bool,
+    mirror_lights: bool,
 }
 
 impl SongLightsGui {
@@ -261,6 +268,11 @@ impl SongLightsGui {
             playlist_name: String::new(),
             ytdlp_cookies_file: settings.ytdlp_cookies_file,
             ytdlp_cookies_browser: settings.ytdlp_cookies_browser,
+            search_query: String::new(),
+            search_hits: Vec::new(),
+            search_busy: false,
+            auto_night_dim: settings.auto_night_dim,
+            mirror_lights: settings.mirror_lights,
         }
     }
 
@@ -303,14 +315,44 @@ impl SongLightsGui {
             seek_snap: self.seek_snap,
             ytdlp_cookies_file: self.ytdlp_cookies_file.clone(),
             ytdlp_cookies_browser: self.ytdlp_cookies_browser.clone(),
+            auto_night_dim: self.auto_night_dim,
+            mirror_lights: self.mirror_lights,
             ..AppSettings::default()
         };
         s.set_play_mode(self.mode);
         s.save();
     }
 
+    fn is_night_hours() -> bool {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        // Approximate local hour via local offset from chrono would be better;
+        // use Windows-local via simple hour of day in local timezone via format.
+        // Fallback: treat 22–7 as night in local TZ using strftime-like approach.
+        #[cfg(windows)]
+        {
+            use std::process::Command;
+            if let Ok(out) = Command::new("powershell")
+                .args(["-NoProfile", "-Command", "(Get-Date).Hour"])
+                .output()
+            {
+                if let Ok(s) = String::from_utf8(out.stdout) {
+                    if let Ok(h) = s.trim().parse::<u32>() {
+                        return !(7..22).contains(&h);
+                    }
+                }
+            }
+        }
+        let hour = ((secs / 3600) % 24) as u32; // UTC fallback
+        !(7..22).contains(&hour)
+    }
+
     fn effective_brightness(&self) -> f32 {
-        if self.night_dim {
+        let night = self.night_dim || (self.auto_night_dim && Self::is_night_hours());
+        if night {
             self.brightness * 0.45
         } else {
             self.brightness
@@ -326,6 +368,7 @@ impl SongLightsGui {
             } else {
                 AmbientEffect::Off
             });
+            s.set_mirror_lights(self.mirror_lights);
         }
     }
 
@@ -437,6 +480,7 @@ impl SongLightsGui {
             } else {
                 AmbientEffect::Off
             },
+            mirror_lights: self.mirror_lights,
         };
 
         match start_show(
@@ -452,6 +496,7 @@ impl SongLightsGui {
                 h.set_brightness(self.effective_brightness());
                 h.set_ab_loop(self.ab_a, self.ab_b);
                 h.set_ambient_effect(cfg.ambient_effect);
+                h.set_mirror_lights(self.mirror_lights);
                 if resume > 0.0 {
                     let _ = h.seek(resume);
                     self.status =
@@ -636,12 +681,23 @@ impl SongLightsGui {
                 Ok(LoadMsg::Status(s)) => self.status = s,
                 Ok(LoadMsg::Ok(pkg)) => {
                     self.busy = false;
+                    self.search_busy = false;
                     self.load_rx = None;
                     self.apply_package(pkg, true);
                     return;
                 }
+                Ok(LoadMsg::SearchOk(hits)) => {
+                    self.busy = false;
+                    self.search_busy = false;
+                    self.load_rx = None;
+                    let n = hits.len();
+                    self.search_hits = hits;
+                    self.status = format!("Search: {n} results — click to play");
+                    return;
+                }
                 Ok(LoadMsg::Err(e)) => {
                     self.busy = false;
+                    self.search_busy = false;
                     self.load_rx = None;
                     self.status = "Load failed".into();
                     self.error_popup = Some(e);
@@ -650,11 +706,37 @@ impl SongLightsGui {
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     self.busy = false;
+                    self.search_busy = false;
                     self.load_rx = None;
                     break;
                 }
             }
         }
+    }
+
+    fn run_search(&mut self) {
+        if self.busy || self.search_busy {
+            return;
+        }
+        let q = self.search_query.trim().to_string();
+        if q.is_empty() {
+            self.error_popup = Some("Type a search query first.".into());
+            return;
+        }
+        self.search_busy = true;
+        self.busy = true;
+        self.status = format!("Searching YouTube: {q}…");
+        let auth = self.ytdlp_auth();
+        let (tx, rx) = mpsc::channel();
+        self.load_rx = Some(rx);
+        thread::spawn(move || match search_youtube(&q, 8, &auth) {
+            Ok(hits) => {
+                let _ = tx.send(LoadMsg::SearchOk(hits));
+            }
+            Err(e) => {
+                let _ = tx.send(LoadMsg::Err(e.to_string()));
+            }
+        });
     }
 
     fn fmt_time(s: f64) -> String {
@@ -901,18 +983,24 @@ impl SongLightsGui {
         let mut intro = false;
         let mut mark = false;
         let mut snap = false;
+        let mut replay_line = false;
         let mut offset_minus = false;
         let mut offset_plus = false;
         let mut pct_key: Option<u8> = None;
+        let mut seek_long = false;
         ctx.input(|i| {
             if i.key_pressed(Key::Space) {
                 space = true;
             }
+            seek_long = i.modifiers.shift;
             if i.key_pressed(Key::ArrowLeft) {
                 left = true;
             }
             if i.key_pressed(Key::ArrowRight) {
                 right = true;
+            }
+            if i.key_pressed(Key::R) && !i.modifiers.matches_logically(Modifiers::CTRL) {
+                replay_line = true;
             }
             if i.modifiers.matches_logically(Modifiers::CTRL) && i.key_pressed(Key::O) {
                 open = true;
@@ -1029,10 +1117,17 @@ impl SongLightsGui {
             }
         }
         if left && !focus_text {
-            self.seek_rel(-10.0);
+            self.seek_rel(if seek_long { -30.0 } else { -10.0 });
         }
         if right && !focus_text {
-            self.seek_rel(10.0);
+            self.seek_rel(if seek_long { 30.0 } else { 10.0 });
+        }
+        if replay_line && !focus_text {
+            if let Some(s) = &self.show {
+                if let Ok(t) = s.replay_line() {
+                    self.status = format!("Replay line @ {}", Self::fmt_time(t));
+                }
+            }
         }
         if mute && !focus_text {
             if let Some(s) = &self.show {
@@ -1198,6 +1293,7 @@ impl eframe::App for SongLightsGui {
             } else {
                 AmbientEffect::Off
             });
+            show.set_mirror_lights(self.mirror_lights);
             let pos = show.position_s();
             let dur = self.duration_s.max(show.duration_s());
             if !self.scrubbing && dur > 0.0 {
@@ -1278,6 +1374,8 @@ impl eframe::App for SongLightsGui {
                          I         Skip intro\n\
                          M         Mute\n\
                          S         Snap to nearest lyric\n\
+                         R         Replay current lyric line\n\
+                         Shift+←/→ Seek ±30s\n\
                          1–9       Jump to 10%–90%\n\
                          [ / ]     Offset −0.1s / +0.1s\n\
                          Ctrl+B    Bookmark position\n\
@@ -1329,6 +1427,24 @@ impl eframe::App for SongLightsGui {
                             self.queue.songs.clear();
                             self.queue.index = -1;
                             self.status = "Queue cleared".into();
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        if ui
+                            .small_button("Shuffle Q")
+                            .on_hover_text("Shuffle queue order")
+                            .clicked()
+                        {
+                            self.queue.shuffle_in_place();
+                            self.status = "Queue shuffled".into();
+                        }
+                        if ui
+                            .small_button("↑ Top")
+                            .on_hover_text("Move current to top of queue")
+                            .clicked()
+                        {
+                            self.queue.move_current_to_top();
+                            self.status = "Moved current to top".into();
                         }
                     });
                     ui.horizontal(|ui| {
@@ -1566,6 +1682,51 @@ impl eframe::App for SongLightsGui {
                         }
                     });
                     if !self.mini_player {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("Search").color(DIM).small());
+                            let w = ui.available_width() - 90.0;
+                            let resp = ui.add_sized(
+                                [w.max(100.0), 22.0],
+                                egui::TextEdit::singleline(&mut self.search_query)
+                                    .hint_text("artist or song name…"),
+                            );
+                            if resp.lost_focus()
+                                && ui.input(|i| i.key_pressed(Key::Enter))
+                                && !self.search_busy
+                            {
+                                self.run_search();
+                            }
+                            if ui
+                                .add_enabled(!self.busy, egui::Button::new("Find"))
+                                .clicked()
+                            {
+                                self.run_search();
+                            }
+                        });
+                        if self.search_busy {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label(RichText::new("Searching…").color(DIM).small());
+                            });
+                        }
+                        if !self.search_hits.is_empty() {
+                            ui.label(RichText::new("Results (click to play)").color(DIM).small());
+                            let mut pick: Option<String> = None;
+                            ScrollArea::vertical().max_height(110.0).show(ui, |ui| {
+                                for h in &self.search_hits {
+                                    if ui
+                                        .selectable_label(false, RichText::new(h.label()).size(12.0))
+                                        .clicked()
+                                    {
+                                        pick = Some(h.url.clone());
+                                    }
+                                }
+                            });
+                            if let Some(u) = pick {
+                                self.url = u;
+                                self.load_youtube();
+                            }
+                        }
                         ui.horizontal_wrapped(|ui| {
                             ui.checkbox(&mut self.play_audio, "Audio");
                             ui.checkbox(&mut self.clock_sync, "Sync");
@@ -1705,6 +1866,17 @@ impl eframe::App for SongLightsGui {
                             let _ = show.seek(self.scrub as f64 * self.duration_s.max(0.01));
                         }
                     }
+                    // Per-line lyric progress (karaoke fill)
+                    if let Some(show) = &self.show {
+                        if show.is_running() || show.is_paused() {
+                            let lp = show.line_progress();
+                            ui.add(
+                                egui::ProgressBar::new(lp)
+                                    .desired_width(f32::INFINITY)
+                                    .text(format!("line {:.0}%", lp * 100.0)),
+                            );
+                        }
+                    }
 
                     ui.horizontal(|ui| {
                         if ui.button("⏮").on_hover_text("Previous").clicked() {
@@ -1788,6 +1960,24 @@ impl eframe::App for SongLightsGui {
                         }
                         if ui.small_button("Replay").clicked() {
                             self.start_current();
+                        }
+                        if ui
+                            .small_button("Replay line")
+                            .on_hover_text("R — jump to start of current lyric")
+                            .clicked()
+                        {
+                            if let Some(s) = &self.show {
+                                if let Ok(t) = s.replay_line() {
+                                    self.status =
+                                        format!("Replay line @ {}", Self::fmt_time(t));
+                                }
+                            }
+                        }
+                        if ui.small_button("−30s").clicked() {
+                            self.seek_rel(-30.0);
+                        }
+                        if ui.small_button("+30s").clicked() {
+                            self.seek_rel(30.0);
                         }
                         if ui.small_button("Copy lyric").clicked() && self.active_line >= 0 {
                             if let Some(ln) = self.timed_lines.get(self.active_line as usize) {
@@ -2133,6 +2323,21 @@ impl eframe::App for SongLightsGui {
                                     if ui.checkbox(&mut self.night_dim, "Night").changed() {
                                         self.apply_live_show_opts();
                                     }
+                                    if ui
+                                        .checkbox(&mut self.auto_night_dim, "Auto night")
+                                        .on_hover_text("Dim 22:00–07:00 local")
+                                        .changed()
+                                    {
+                                        self.apply_live_show_opts();
+                                        self.persist_settings();
+                                    }
+                                    if ui
+                                        .checkbox(&mut self.mirror_lights, "Mirror FX")
+                                        .changed()
+                                    {
+                                        self.apply_live_show_opts();
+                                        self.persist_settings();
+                                    }
                                 });
                                 ui.horizontal(|ui| {
                                     ui.checkbox(&mut self.resume_position, "Resume pos");
@@ -2162,6 +2367,23 @@ impl eframe::App for SongLightsGui {
                                     }
                                     if ui.small_button("F1 Help").clicked() {
                                         self.show_help = true;
+                                    }
+                                    if ui
+                                        .small_button("Export stats")
+                                        .on_hover_text("CSV of listen stats")
+                                        .clicked()
+                                    {
+                                        if let Some(path) = rfd::FileDialog::new()
+                                            .add_filter("CSV", &["csv"])
+                                            .set_file_name("listen_stats.csv")
+                                            .save_file()
+                                        {
+                                            if std::fs::write(&path, self.stats.to_csv()).is_ok()
+                                            {
+                                                self.status =
+                                                    format!("Exported {}", path.display());
+                                            }
+                                        }
                                     }
                                 });
                                 ui.horizontal(|ui| {

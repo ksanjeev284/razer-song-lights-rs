@@ -68,6 +68,17 @@ impl ListenStats {
             }
         )
     }
+
+    /// CSV export for listen stats.
+    pub fn to_csv(&self) -> String {
+        format!(
+            "songs_played,total_listen_secs,sessions,last_played\n{},{:.3},{},\"{}\"\n",
+            self.songs_played,
+            self.total_listen_secs,
+            self.sessions,
+            self.last_played.replace('"', "'")
+        )
+    }
 }
 
 /// In-song bookmarks.
@@ -153,6 +164,7 @@ mod tests {
         assert_eq!(s.songs_played, 1);
         s.add_listen_secs(30.0);
         assert!((s.total_listen_secs - 30.0).abs() < 0.01);
+        assert!(s.to_csv().contains("songs_played"));
     }
 
     #[test]
