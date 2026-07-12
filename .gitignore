@@ -9,3 +9,7 @@ report.json
 /target/
 report.json
 
+
+dist/
+dist2/
+
