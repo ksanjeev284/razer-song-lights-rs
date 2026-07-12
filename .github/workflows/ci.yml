@@ -16,22 +16,46 @@ jobs:
         os: [windows-latest, ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
+
       - uses: dtolnay/rust-toolchain@stable
-      - name: Cargo test (unit + offline integration)
-        run: cargo test --all-targets
-      - name: Cargo clippy
-        run: cargo clippy --all-targets -- -D warnings
+        with:
+          components: clippy, rustfmt
+
+      - name: Install Linux audio / GUI build deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev \
+            libudev-dev \
+            pkg-config \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev \
+            libssl-dev \
+            libgtk-3-dev
+
       - name: Cargo fmt check
         run: cargo fmt -- --check
+
+      - name: Cargo test (unit + offline integration)
+        run: cargo test --all-targets
+
+      - name: Cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
 
   ten-song-qa:
     name: 10-song live QA (network)
     runs-on: ubuntu-latest
-    # optional: only on main / manual to avoid flaky CI rate limits
-    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev pkg-config libssl-dev
       - name: Build
         run: cargo build --release
       - name: Run 10-song QA

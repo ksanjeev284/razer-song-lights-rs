@@ -109,11 +109,7 @@ pub fn parse_lrc_lines(lrc: &str) -> Vec<TimedLine> {
     let mut lines = Vec::with_capacity(n);
     for i in 0..n {
         let (t, text) = &dedup[i];
-        let mut end = if i + 1 < n {
-            dedup[i + 1].0
-        } else {
-            t + 4.0
-        };
+        let mut end = if i + 1 < n { dedup[i + 1].0 } else { t + 4.0 };
         if end <= *t {
             end = t + 2.0;
         }
@@ -273,4 +269,3 @@ mod tests {
         assert_eq!(out[0].t, 0.0);
     }
 }
-

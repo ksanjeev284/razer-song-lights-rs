@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.1] — 2026-07-12
+
+### CI / Release
+- Fix Clippy `-D warnings` failures that broke CI on all platforms
+- Install Linux audio/GUI system packages in CI
+- **Multi-platform release binaries** on tag push:
+  - `razer-song-lights-windows-x64.exe`
+  - `razer-song-lights-linux-x64`
+  - `razer-song-lights-macos-arm64` (Apple Silicon)
+  - `razer-song-lights-macos-x64` (Intel)
+
+---
+
 ## [0.8.0] — 2026-07-12
 
 ### Features

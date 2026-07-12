@@ -68,8 +68,7 @@ pub fn simulate_sync(lines: &[TimedLine], offset_s: f64) -> Result<Vec<(f64, isi
         if lines[idx as usize].t > t + 0.1 {
             return Err(format!(
                 "line {} starts {:.1} > t={t:.1}",
-                idx,
-                lines[idx as usize].t
+                idx, lines[idx as usize].t
             ));
         }
         samples.push((t, idx));

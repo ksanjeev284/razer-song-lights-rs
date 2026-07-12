@@ -111,10 +111,7 @@ pub const SONG_CATALOG: &[SongRef] = &[
         duration_s: 204.0,
         must_contain: &["first things first", "believer"],
         must_not_contain: &["radioactive"],
-        youtube_titles: &[
-            "Imagine Dragons - Believer",
-            "Believer - Imagine Dragons",
-        ],
+        youtube_titles: &["Imagine Dragons - Believer", "Believer - Imagine Dragons"],
         min_timed_lines: 12,
         min_coverage: 0.50,
     },
@@ -151,4 +148,3 @@ mod tests {
         assert_eq!(SONG_CATALOG.len(), 10);
     }
 }
-

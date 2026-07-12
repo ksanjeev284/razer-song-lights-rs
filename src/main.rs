@@ -145,11 +145,7 @@ fn main() -> Result<()> {
             }
             let q = lrc_quality_score(&text, duration);
             let last = lines.last().unwrap().t;
-            let cov = if duration > 0.0 {
-                last / duration
-            } else {
-                0.0
-            };
+            let cov = if duration > 0.0 { last / duration } else { 0.0 };
             println!(
                 "lines={} first={:.1}s last={:.1}s coverage={:.0}% quality={:.1}",
                 lines.len(),

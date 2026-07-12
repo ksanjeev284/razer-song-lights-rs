@@ -6,11 +6,11 @@ use crate::cache::{
 };
 use crate::chroma::is_chroma_supported;
 use crate::history::{load_history_packages, push_history, PlayQueue};
-use crate::lrclib::fetch_lyrics;
 use crate::lrc::lrc_quality_score;
+use crate::lrclib::fetch_lyrics;
+use crate::playlists::{timed_lines_to_lrc, PlaylistStore};
 use crate::settings::{AppSettings, Favorites};
 use crate::show::{build_timed_lines, start_show, PlayMode, ShowConfig, ShowHandle};
-use crate::playlists::{timed_lines_to_lrc, PlaylistStore};
 use crate::song_memory::{export_playlist, parse_playlist_urls, SongMemory};
 use crate::stats::{Bookmarks, ListenStats};
 use crate::sync_sim::line_index_for_time;
@@ -421,11 +421,8 @@ impl SongLightsGui {
                 h.set_ambient_effect(cfg.ambient_effect);
                 if resume > 0.0 {
                     let _ = h.seek(resume);
-                    self.status = format!(
-                        "Resumed @ {} — {}",
-                        Self::fmt_time(resume),
-                        self.song_label
-                    );
+                    self.status =
+                        format!("Resumed @ {} — {}", Self::fmt_time(resume), self.song_label);
                     self.song_memory.clear_resume(&self.video_id);
                 } else {
                     self.status = format!("Playing — {}", self.song_label);
@@ -569,11 +566,7 @@ impl SongLightsGui {
             } else {
                 "lights only"
             },
-            if pkg.is_synced() {
-                "SYNCED"
-            } else {
-                "est."
-            }
+            if pkg.is_synced() { "SYNCED" } else { "est." }
         );
         self.lyrics_edit = pkg.lyrics.clone();
         self.duration_s = pkg.duration_s;
@@ -659,8 +652,7 @@ impl SongLightsGui {
         if self.resume_position || self.remember_offset {
             if let Some(s) = &self.show {
                 if self.resume_position && !self.video_id.is_empty() {
-                    self.song_memory
-                        .set_resume(&self.video_id, s.position_s());
+                    self.song_memory.set_resume(&self.video_id, s.position_s());
                 }
             }
             if self.remember_offset && !self.video_id.is_empty() {
@@ -1074,8 +1066,7 @@ impl SongLightsGui {
             .pick_file()
         {
             if let Ok(content) = std::fs::read_to_string(&path) {
-                if path.extension().map(|e| e == "lrc").unwrap_or(false) || content.contains('[')
-                {
+                if path.extension().map(|e| e == "lrc").unwrap_or(false) || content.contains('[') {
                     self.synced_lrc = Some(content.clone());
                     self.lyrics_edit = crate::lyrics_match::clean_lyrics(&content);
                 } else {
@@ -1130,13 +1121,9 @@ impl eframe::App for SongLightsGui {
         if let Some(show) = &self.show {
             if show.has_ended() && !self.was_ended {
                 self.was_ended = true;
-                let can_advance = self.auto_next
-                    || self.repeat == RepeatMode::All
-                    || self.shuffle;
+                let can_advance = self.auto_next || self.repeat == RepeatMode::All || self.shuffle;
                 if can_advance
-                    && (self.queue.can_next()
-                        || self.repeat == RepeatMode::All
-                        || self.shuffle)
+                    && (self.queue.can_next() || self.repeat == RepeatMode::All || self.shuffle)
                 {
                     self.status = "Track ended — next…".into();
                     self.next_song();
@@ -1170,8 +1157,7 @@ impl eframe::App for SongLightsGui {
             if !self.scrubbing && dur > 0.0 {
                 self.scrub = (pos / dur).clamp(0.0, 1.0) as f32;
             }
-            self.active_line =
-                line_index_for_time(&self.timed_lines, pos, self.offset as f64);
+            self.active_line = line_index_for_time(&self.timed_lines, pos, self.offset as f64);
             // Accrue listen stats every ~5s while playing
             if show.is_running() && !show.is_paused() {
                 let elapsed = self.listen_tick.elapsed().as_secs_f64();
@@ -1195,11 +1181,7 @@ impl eframe::App for SongLightsGui {
                                 if !vid.is_empty() {
                                     thread::spawn(move || {
                                         let root = default_cache_root();
-                                        let _ = download_audio(
-                                            &url,
-                                            &vid,
-                                            &root.join("audio"),
-                                        );
+                                        let _ = download_audio(&url, &vid, &root.join("audio"));
                                     });
                                 }
                             }
@@ -1213,13 +1195,11 @@ impl eframe::App for SongLightsGui {
         }
 
         // Viewport: always on top / mini
-        ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
-            if self.always_on_top {
-                egui::WindowLevel::AlwaysOnTop
-            } else {
-                egui::WindowLevel::Normal
-            },
-        ));
+        ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(if self.always_on_top {
+            egui::WindowLevel::AlwaysOnTop
+        } else {
+            egui::WindowLevel::Normal
+        }));
 
         if let Some(err) = self.error_popup.clone() {
             egui::Window::new("Error")
@@ -1262,17 +1242,19 @@ impl eframe::App for SongLightsGui {
                 });
         }
 
-        egui::TopBottomPanel::bottom("status").exact_height(30.0).show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                let (rect, _) = ui.allocate_exact_size(Vec2::splat(11.0), Sense::hover());
-                ui.painter().circle_filled(
-                    rect.center(),
-                    4.5,
-                    if self.chroma_ok { ACCENT } else { DANGER },
-                );
-                ui.label(RichText::new(&self.status).color(DIM).size(12.5));
+        egui::TopBottomPanel::bottom("status")
+            .exact_height(30.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    let (rect, _) = ui.allocate_exact_size(Vec2::splat(11.0), Sense::hover());
+                    ui.painter().circle_filled(
+                        rect.center(),
+                        4.5,
+                        if self.chroma_ok { ACCENT } else { DANGER },
+                    );
+                    ui.label(RichText::new(&self.status).color(DIM).size(12.5));
+                });
             });
-        });
 
         // History / favorites side panel
         if self.show_history {
@@ -1287,7 +1269,11 @@ impl eframe::App for SongLightsGui {
                         if ui.small_button("Export M3U").clicked() {
                             self.export_queue_playlist();
                         }
-                        if ui.small_button("Clear Q").on_hover_text("Clear queue").clicked() {
+                        if ui
+                            .small_button("Clear Q")
+                            .on_hover_text("Clear queue")
+                            .clicked()
+                        {
                             self.queue.songs.clear();
                             self.queue.index = -1;
                             self.status = "Queue cleared".into();
@@ -1299,7 +1285,11 @@ impl eframe::App for SongLightsGui {
                                 .hint_text("Playlist name…")
                                 .desired_width(110.0),
                         );
-                        if ui.small_button("Save").on_hover_text("Save queue as named playlist").clicked() {
+                        if ui
+                            .small_button("Save")
+                            .on_hover_text("Save queue as named playlist")
+                            .clicked()
+                        {
                             self.save_named_playlist();
                         }
                     });
@@ -1316,7 +1306,10 @@ impl eframe::App for SongLightsGui {
                                         }
                                     }
                                 });
-                            if ui.small_button("Del").on_hover_text("Delete named playlist").clicked()
+                            if ui
+                                .small_button("Del")
+                                .on_hover_text("Delete named playlist")
+                                .clicked()
                                 && !self.playlist_name.is_empty()
                             {
                                 let n = self.playlist_name.clone();
@@ -1337,8 +1330,7 @@ impl eframe::App for SongLightsGui {
                     let filt = self.history_filter.to_lowercase();
                     ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
                         for (i, s) in self.queue.songs.iter().enumerate().rev() {
-                            if !filt.is_empty()
-                                && !s.display_name().to_lowercase().contains(&filt)
+                            if !filt.is_empty() && !s.display_name().to_lowercase().contains(&filt)
                             {
                                 continue;
                             }
@@ -1412,10 +1404,7 @@ impl eframe::App for SongLightsGui {
                             ui.label(RichText::new("Play songs to rank them").color(DIM).small());
                         }
                         for (vid, plays, name) in top {
-                            if ui
-                                .button(format!("{plays}× {name}"))
-                                .clicked()
-                            {
+                            if ui.button(format!("{plays}× {name}")).clicked() {
                                 if let Some(pkg) =
                                     self.queue.songs.iter().find(|s| s.video_id == vid).cloned()
                                 {
@@ -1436,25 +1425,21 @@ impl eframe::App for SongLightsGui {
                     ui.add_space(20.0);
                     if self.active_line >= 0 {
                         if let Some(ln) = self.timed_lines.get(self.active_line as usize) {
-                            ui.label(
-                                RichText::new(&ln.text)
-                                    .color(ACCENT)
-                                    .size(36.0)
-                                    .strong(),
-                            );
+                            ui.label(RichText::new(&ln.text).color(ACCENT).size(36.0).strong());
                         }
                     } else {
                         ui.label(RichText::new("…").color(DIM).size(28.0));
                     }
-                    if let Some(next) = self
-                        .timed_lines
-                        .get((self.active_line + 1) as usize)
-                    {
+                    if let Some(next) = self.timed_lines.get((self.active_line + 1) as usize) {
                         ui.add_space(16.0);
                         ui.label(RichText::new(&next.text).color(DIM).size(20.0));
                     }
                     ui.add_space(40.0);
-                    ui.label(RichText::new("F11 to exit fullscreen karaoke").color(DIM).small());
+                    ui.label(
+                        RichText::new("F11 to exit fullscreen karaoke")
+                            .color(DIM)
+                            .small(),
+                    );
                 });
             });
             return;
@@ -1752,14 +1737,10 @@ impl eframe::App for SongLightsGui {
                         if ui.small_button("Replay").clicked() {
                             self.start_current();
                         }
-                        if ui.small_button("Copy lyric").clicked() {
-                            if self.active_line >= 0 {
-                                if let Some(ln) =
-                                    self.timed_lines.get(self.active_line as usize)
-                                {
-                                    ui.output_mut(|o| o.copied_text = ln.text.clone());
-                                    self.status = "Copied current lyric".into();
-                                }
+                        if ui.small_button("Copy lyric").clicked() && self.active_line >= 0 {
+                            if let Some(ln) = self.timed_lines.get(self.active_line as usize) {
+                                ui.output_mut(|o| o.copied_text = ln.text.clone());
+                                self.status = "Copied current lyric".into();
                             }
                         }
                         if ui.small_button("Export LRC").clicked() {
@@ -1917,13 +1898,13 @@ impl eframe::App for SongLightsGui {
                                         continue;
                                     }
                                     let base = self.lyric_font;
-                                let (color, size, strong) =
-                                        if i as isize == self.active_line {
-                                            (ACCENT, base + 3.0, true)
-                                        } else if (i as isize) < self.active_line {
-                                            (PAST, base - 1.0, false)
-                                        } else {
-                                            (DIM, base, false)
+                                    let (color, size, strong) =
+                                        match (i as isize).cmp(&self.active_line) {
+                                            std::cmp::Ordering::Equal => {
+                                                (ACCENT, base + 3.0, true)
+                                            }
+                                            std::cmp::Ordering::Less => (PAST, base - 1.0, false),
+                                            std::cmp::Ordering::Greater => (DIM, base, false),
                                         };
                                     let mut rt =
                                         RichText::new(format!("  {}", ln.text)).color(color).size(size);

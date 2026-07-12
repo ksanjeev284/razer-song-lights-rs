@@ -2,13 +2,27 @@
 
 **Full Razer Song Lights app in Rust** — GUI + CLI + Chroma lights.
 
-**v0.8.0** — Named playlists, ambient FX (wave/breath/ripple), snap seek, 1–9 jump %, top played, sleep fade.
+**v0.8.1** — Multi-platform release binaries (Windows / macOS / Linux) + CI fixes.
 
 https://github.com/ksanjeev284/razer-song-lights-rs
 
+### Download
+
+Pre-built binaries on the [Releases](https://github.com/ksanjeev284/razer-song-lights-rs/releases) page:
+
+| Platform | Asset |
+|----------|--------|
+| Windows x64 | `razer-song-lights-windows-x64.exe` |
+| Linux x64 | `razer-song-lights-linux-x64` |
+| macOS Apple Silicon | `razer-song-lights-macos-arm64` |
+| macOS Intel | `razer-song-lights-macos-x64` |
+
 ```bash
+# Or build from source
 cargo run --release
 ```
+
+**Notes:** Razer Chroma keyboard lights require Windows + Razer Synapse. Audio/lyrics work on all platforms. Linux needs `yt-dlp` on `PATH` for YouTube.
 
 ---
 

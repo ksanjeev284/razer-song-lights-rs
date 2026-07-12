@@ -1,6 +1,6 @@
 [package]
 name = "razer-song-lights-rs"
-version = "0.8.0"
+version = "0.8.1"
 edition = "2021"
 description = "Razer Song Lights — full GUI, YouTube, audio, Chroma lights, karaoke, optimized engine"
 license = "MIT"

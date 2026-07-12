@@ -24,4 +24,3 @@ mod tests {
         assert_eq!(unpack_rgb(rgb(255, 255, 255)), (255, 255, 255));
     }
 }
-

@@ -107,7 +107,12 @@ impl ChromaKeyboard {
     }
 
     /// Soft ambient wash across a band of keys (between lyric events).
-    pub fn ambient_pulse(&mut self, phase: f64, color: u32, strength: f32) -> Result<(), ChromaError> {
+    pub fn ambient_pulse(
+        &mut self,
+        phase: f64,
+        color: u32,
+        strength: f32,
+    ) -> Result<(), ChromaError> {
         self.clear(0);
         let s = strength.clamp(0.05, 1.0);
         let col = ((phase * MAX_COL as f64) as usize) % MAX_COL;
@@ -124,7 +129,12 @@ impl ChromaKeyboard {
     }
 
     /// Horizontal sine wave wash.
-    pub fn ambient_wave(&mut self, phase: f64, color: u32, strength: f32) -> Result<(), ChromaError> {
+    pub fn ambient_wave(
+        &mut self,
+        phase: f64,
+        color: u32,
+        strength: f32,
+    ) -> Result<(), ChromaError> {
         self.clear(0);
         let s = strength.clamp(0.05, 1.0);
         for r in 0..MAX_ROW {
@@ -141,7 +151,12 @@ impl ChromaKeyboard {
     }
 
     /// Whole-keyboard breathing (global pulse).
-    pub fn ambient_breath(&mut self, phase: f64, color: u32, strength: f32) -> Result<(), ChromaError> {
+    pub fn ambient_breath(
+        &mut self,
+        phase: f64,
+        color: u32,
+        strength: f32,
+    ) -> Result<(), ChromaError> {
         self.clear(0);
         let s = strength.clamp(0.05, 1.0);
         let breath = (((phase * 1.8).sin() + 1.0) * 0.5) as f32;
@@ -156,7 +171,12 @@ impl ChromaKeyboard {
     }
 
     /// Expanding ring from center.
-    pub fn ambient_ripple(&mut self, phase: f64, color: u32, strength: f32) -> Result<(), ChromaError> {
+    pub fn ambient_ripple(
+        &mut self,
+        phase: f64,
+        color: u32,
+        strength: f32,
+    ) -> Result<(), ChromaError> {
         self.clear(0);
         let s = strength.clamp(0.05, 1.0);
         let cx = (MAX_COL as f64 - 1.0) / 2.0;
@@ -321,9 +341,9 @@ mod windows_impl {
             let mut effect = CustomEffect {
                 color: [[0; MAX_COL]; MAX_ROW],
             };
-            for r in 0..MAX_ROW {
-                for c in 0..MAX_COL {
-                    effect.color[r][c] = frame[r][c];
+            for (r, row) in frame.iter().enumerate().take(MAX_ROW) {
+                for (c, cell) in row.iter().enumerate().take(MAX_COL) {
+                    effect.color[r][c] = *cell;
                 }
             }
             if self.has_effect {

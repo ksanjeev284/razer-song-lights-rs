@@ -87,11 +87,12 @@ impl ShowHandle {
     pub fn is_running(&self) -> bool {
         !self.stop.load(Ordering::SeqCst)
             && !self.ended.load(Ordering::SeqCst)
-            && self
-                .audio
-                .as_ref()
-                .map(|a| a.is_active())
-                .unwrap_or(self.join.as_ref().map(|j| !j.is_finished()).unwrap_or(false))
+            && self.audio.as_ref().map(|a| a.is_active()).unwrap_or(
+                self.join
+                    .as_ref()
+                    .map(|j| !j.is_finished())
+                    .unwrap_or(false),
+            )
     }
 
     /// Natural end of track (for auto-next).
@@ -178,8 +179,7 @@ impl ShowHandle {
     }
 
     pub fn set_offset(&self, offset: f64) {
-        self.offset_s
-            .store(offset.to_bits(), Ordering::Relaxed);
+        self.offset_s.store(offset.to_bits(), Ordering::Relaxed);
     }
 
     pub fn set_theme(&self, theme: LightTheme) {
@@ -192,14 +192,10 @@ impl ShowHandle {
     }
 
     pub fn set_ab_loop(&self, a: Option<f64>, b: Option<f64>) {
-        self.ab_a.store(
-            a.map(|x| x.to_bits()).unwrap_or(0),
-            Ordering::Relaxed,
-        );
-        self.ab_b.store(
-            b.map(|x| x.to_bits()).unwrap_or(0),
-            Ordering::Relaxed,
-        );
+        self.ab_a
+            .store(a.map(|x| x.to_bits()).unwrap_or(0), Ordering::Relaxed);
+        self.ab_b
+            .store(b.map(|x| x.to_bits()).unwrap_or(0), Ordering::Relaxed);
     }
 
     pub fn clear_ab_loop(&self) {
@@ -250,8 +246,7 @@ impl ShowHandle {
     }
 
     pub fn set_ambient_effect(&self, effect: AmbientEffect) {
-        self.ambient_effect
-            .store(effect.index(), Ordering::Relaxed);
+        self.ambient_effect.store(effect.index(), Ordering::Relaxed);
         self.ambient.store(effect.is_on(), Ordering::Relaxed);
     }
 
@@ -294,14 +289,8 @@ pub fn run_show(
     cfg: &ShowConfig,
     stop: Arc<AtomicBool>,
 ) -> anyhow::Result<()> {
-    let mut handle = start_show_with_stop(
-        lyrics_plain,
-        synced_lrc,
-        duration_s,
-        audio_path,
-        cfg,
-        stop,
-    )?;
+    let mut handle =
+        start_show_with_stop(lyrics_plain, synced_lrc, duration_s, audio_path, cfg, stop)?;
     if let Some(j) = handle.join.take() {
         let _ = j.join();
     }
@@ -430,6 +419,7 @@ fn start_show_with_stop(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_engine(
     lines: &[TimedLine],
     words: &[TimedWord],
@@ -696,7 +686,10 @@ mod tests {
         let lrc = "[00:01.00]one two\n[00:05.00]three four\n";
         let lines = parse_lrc_lines(lrc);
         let words = lines_to_timed_words(&lines, 20.0);
-        assert!(active_word_index(&words, 0.0, 0.0).is_none() || active_word_index(&words, 0.0, 0.0) == Some(0));
+        assert!(
+            active_word_index(&words, 0.0, 0.0).is_none()
+                || active_word_index(&words, 0.0, 0.0) == Some(0)
+        );
         let mid = active_word_index(&words, 6.0, 0.0);
         assert!(mid.is_some());
         // seeking back

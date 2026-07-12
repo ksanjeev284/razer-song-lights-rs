@@ -53,10 +53,7 @@ impl SongMemory {
         if id.is_empty() {
             return;
         }
-        self.by_id
-            .entry(id.to_string())
-            .or_default()
-            .offset = offset;
+        self.by_id.entry(id.to_string()).or_default().offset = offset;
         self.save();
     }
 

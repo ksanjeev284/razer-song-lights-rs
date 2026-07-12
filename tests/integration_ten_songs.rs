@@ -75,4 +75,3 @@ fn ten_songs_identity_and_sync() {
     }
     assert_eq!(passed, 10);
 }
-

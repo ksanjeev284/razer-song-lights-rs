@@ -112,11 +112,7 @@ pub fn extract_meta(url: &str) -> Result<YoutubeMeta, YoutubeError> {
 }
 
 /// Download best audio to `out_dir/{video_id}.mp3` (or cached existing file).
-pub fn download_audio(
-    url: &str,
-    video_id: &str,
-    out_dir: &Path,
-) -> Result<PathBuf, YoutubeError> {
+pub fn download_audio(url: &str, video_id: &str, out_dir: &Path) -> Result<PathBuf, YoutubeError> {
     std::fs::create_dir_all(out_dir)?;
     // Cache hit
     for ext in ["mp3", "m4a", "opus", "ogg", "webm", "wav"] {

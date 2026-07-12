@@ -86,4 +86,3 @@ mod tests {
         assert_eq!(split_lines("a\n\nb\n  \nc"), vec!["a", "b", "c"]);
     }
 }
-

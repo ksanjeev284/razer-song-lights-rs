@@ -22,4 +22,3 @@ fn all_catalog_youtube_titles_parse() {
         }
     }
 }
-

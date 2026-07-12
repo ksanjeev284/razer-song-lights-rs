@@ -86,7 +86,12 @@ fn score_record(rec: &LrclibRecord, artist: &str, track: &str, duration_s: f64) 
             s -= 4.0;
         }
     }
-    if rec.synced_lyrics.as_ref().map(|x| x.contains('[')).unwrap_or(false) {
+    if rec
+        .synced_lyrics
+        .as_ref()
+        .map(|x| x.contains('['))
+        .unwrap_or(false)
+    {
         s += 4.0;
     } else if rec.plain_lyrics.is_some() {
         s += 1.0;
@@ -114,7 +119,10 @@ fn score_record(rec: &LrclibRecord, artist: &str, track: &str, duration_s: f64) 
 }
 
 fn normalize(s: &str) -> String {
-    s.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect()
+    s.to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect()
 }
 
 /// Search + get best match from lrclib.
@@ -232,4 +240,3 @@ fn urlencoding(s: &str) -> String {
     }
     out
 }
-

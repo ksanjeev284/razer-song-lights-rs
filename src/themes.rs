@@ -155,11 +155,7 @@ pub fn themed_color(theme: LightTheme, index: usize, brightness: f32) -> u32 {
         }
         LightTheme::Ice => {
             let t = (index % 6) as f32 / 5.0;
-            (
-                (120.0 + 80.0 * t) as u8,
-                (200.0 + 40.0 * t) as u8,
-                255,
-            )
+            ((120.0 + 80.0 * t) as u8, (200.0 + 40.0 * t) as u8, 255)
         }
         LightTheme::Purple => {
             let t = (index % 5) as f32 / 4.0;

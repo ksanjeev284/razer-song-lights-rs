@@ -336,11 +336,8 @@ mod tests {
 
     #[test]
     fn missing_file() {
-        match AudioPlayer::new() {
-            Ok(ap) => {
-                assert!(ap.play(Path::new("no_such_file.mp3"), 0.5, 0.0).is_err());
-            }
-            Err(_) => {}
+        if let Ok(ap) = AudioPlayer::new() {
+            assert!(ap.play(Path::new("no_such_file.mp3"), 0.5, 0.0).is_err());
         }
     }
 }

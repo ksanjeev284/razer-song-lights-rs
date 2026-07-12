@@ -21,14 +21,8 @@ pub fn names_similar(a: &str, b: &str) -> bool {
     if a_n == b_n || a_n.contains(&b_n) || b_n.contains(&a_n) {
         return true;
     }
-    let ta: std::collections::HashSet<_> = a_n
-        .split_whitespace()
-        .filter(|t| t.len() > 1)
-        .collect();
-    let tb: std::collections::HashSet<_> = b_n
-        .split_whitespace()
-        .filter(|t| t.len() > 1)
-        .collect();
+    let ta: std::collections::HashSet<_> = a_n.split_whitespace().filter(|t| t.len() > 1).collect();
+    let tb: std::collections::HashSet<_> = b_n.split_whitespace().filter(|t| t.len() > 1).collect();
     if ta.is_empty() || tb.is_empty() {
         return false;
     }
@@ -118,9 +112,8 @@ pub fn is_youtube_url(value: &str) -> bool {
 /// Best-effort extract YouTube video id.
 pub fn video_id_from_url(url: &str) -> Option<String> {
     static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| {
-        Regex::new(r"(?:v=|/shorts/|youtu\.be/)([A-Za-z0-9_-]{6,})").unwrap()
-    });
+    let re =
+        RE.get_or_init(|| Regex::new(r"(?:v=|/shorts/|youtu\.be/)([A-Za-z0-9_-]{6,})").unwrap());
     re.captures(url.trim())
         .and_then(|c| c.get(1))
         .map(|m| m.as_str().to_string())
@@ -141,8 +134,7 @@ mod tests {
 
     #[test]
     fn artist_dash_song() {
-        let (track, _) =
-            split_title("Cigarettes After Sex - Apocalypse", "Cigarettes After Sex");
+        let (track, _) = split_title("Cigarettes After Sex - Apocalypse", "Cigarettes After Sex");
         assert_eq!(clean_track_name(&track), "Apocalypse");
     }
 
@@ -175,4 +167,3 @@ mod tests {
         );
     }
 }
-

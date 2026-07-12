@@ -105,6 +105,8 @@ impl PlayQueue {
         }
     }
 
+    /// Advance to the next song in the queue (not Iterator::next).
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<&SongPackage> {
         if self.index >= 0 && (self.index as usize) + 1 < self.songs.len() {
             self.index += 1;
