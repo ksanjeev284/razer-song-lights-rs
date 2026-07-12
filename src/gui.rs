@@ -114,6 +114,8 @@ struct SongLightsGui {
     recent_urls: Vec<String>,
 
     show: Option<ShowHandle>,
+    /// Deferred drop after fade (keeps ShowHandle on GUI thread — required on macOS).
+    fading_show: Option<(Instant, ShowHandle)>,
     queue: PlayQueue,
     favorites: Favorites,
     timed_lines: Vec<crate::lrc::TimedLine>,
@@ -208,6 +210,7 @@ impl SongLightsGui {
             fullscreen_karaoke: false,
             recent_urls: settings.recent_urls,
             show: None,
+            fading_show: None,
             queue,
             favorites: Favorites::load(),
             timed_lines: Vec::new(),
@@ -332,10 +335,11 @@ impl SongLightsGui {
         if let Some(mut s) = self.show.take() {
             if self.fade_on_stop && s.is_running() {
                 s.fade_stop();
-                thread::spawn(move || {
-                    thread::sleep(Duration::from_millis(1400));
-                    drop(s);
-                });
+                // Replace prior fading player (at most one deferred drop)
+                if let Some((_, old)) = self.fading_show.take() {
+                    drop(old);
+                }
+                self.fading_show = Some((Instant::now() + Duration::from_millis(1400), s));
             } else {
                 s.stop();
             }
@@ -343,6 +347,16 @@ impl SongLightsGui {
         self.was_ended = false;
         self.prefetched = false;
         self.status = "Stopped".into();
+    }
+
+    fn poll_fading_show(&mut self) {
+        if let Some((until, s)) = self.fading_show.take() {
+            if Instant::now() >= until {
+                drop(s);
+            } else {
+                self.fading_show = Some((until, s));
+            }
+        }
     }
 
     fn start_current(&mut self) {
@@ -662,10 +676,10 @@ impl SongLightsGui {
         if self.crossfade_next {
             if let Some(mut s) = self.show.take() {
                 s.fade_stop();
-                thread::spawn(move || {
-                    thread::sleep(Duration::from_millis(900));
-                    drop(s);
-                });
+                if let Some((_, old)) = self.fading_show.take() {
+                    drop(old);
+                }
+                self.fading_show = Some((Instant::now() + Duration::from_millis(900), s));
             }
         }
         // Repeat all: wrap; shuffle: random; else sequential
@@ -825,7 +839,7 @@ impl SongLightsGui {
                 (id.clone(), e.plays, name)
             })
             .collect();
-        items.sort_by(|a, b| b.1.cmp(&a.1));
+        items.sort_by_key(|b| std::cmp::Reverse(b.1));
         items.truncate(limit);
         items
     }
@@ -1092,7 +1106,11 @@ impl SongLightsGui {
 impl eframe::App for SongLightsGui {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_load();
+        self.poll_fading_show();
         self.handle_shortcuts(ctx);
+        if self.fading_show.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
 
         // Sleep timer (optional fade in last ~1.2s)
         if let Some(until) = self.sleep_until {

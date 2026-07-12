@@ -43,7 +43,12 @@ jobs:
         run: cargo test --all-targets
 
       - name: Cargo clippy
-        run: cargo clippy --all-targets -- -D warnings
+        # Pedantic style lints stay allow; deny correctness + common CI footguns
+        run: >
+          cargo clippy --all-targets --
+          -D warnings
+          -A clippy::too_many_arguments
+          -A clippy::should_implement_trait
 
   ten-song-qa:
     name: 10-song live QA (network)

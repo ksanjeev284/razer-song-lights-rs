@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.2] — 2026-07-12
+
+### Fixes
+- **macOS build**: no longer move audio/`ShowHandle` across threads (cpal CoreAudio is not `Send`)
+- Fade/crossfade deferred drop stays on the GUI thread
+- Remaining Clippy nits for CI green on Win/Linux/macOS
+
 ## [0.8.1] — 2026-07-12
 
 ### CI / Release
