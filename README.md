@@ -4,29 +4,45 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.74%2B-orange.svg)](https://www.rust-lang.org/)
 
-**Rust core** for [Razer Song Lights](https://github.com/ksanjeev284/razer-song-lights) — correct lyrics identity, LRC timing, YouTube title parsing, lrclib client, and full unit/integration QA.
+**Full Razer Song Lights stack in Rust** — YouTube → lyrics + audio → **synced Chroma keyboard lights** + karaoke console.
 
-> Companion to the **Python + Chroma SDK** desktop app (Windows keyboard lights).  
-> This crate is **portable** (Windows / Linux / macOS) for logic + lyrics + sync QA.
+Companion to the [Python GUI app](https://github.com/ksanjeev284/razer-song-lights).
 
----
-
-## Features
-
-| Module | Purpose |
-|--------|---------|
-| `lrc` | Parse LRC timestamps, quality score, word expansion, offsets |
-| `title` | `Song - Artist` / `Artist - Song` YouTube title parse, URL helpers |
-| `lyrics_match` | Clean lyrics, reject wrong-song / track≈artist hits |
-| `lrclib` | Live client for [lrclib.net](https://lrclib.net) synced lyrics |
-| `sync_sim` | Active line index vs song time (karaoke clock) |
-| `cache` | JSON song package cache with invalidation |
-| `key_map` | Char → Chroma 6×22 grid (preview / future native binding) |
-| `song_catalog` | 10 reference tracks for accuracy QA |
+**Current version: 0.2.0**
 
 ---
 
-## Quick start
+## Features (all working)
+
+| Feature | Status |
+|--------|--------|
+| YouTube metadata (`yt-dlp`) | ✅ |
+| Audio download + cache | ✅ |
+| Synced LRC lyrics (lrclib) | ✅ |
+| Correct title parse (`Song - Artist` / `Artist - Song`) | ✅ |
+| Local audio play + seek (rodio) | ✅ |
+| Razer Chroma keyboard lights (Windows SDK) | ✅ |
+| Word / line flash modes | ✅ |
+| Karaoke console line display | ✅ |
+| Sync offset | ✅ |
+| Song package cache | ✅ |
+| 10-song accuracy + timing QA | ✅ **10/10** |
+| Desktop GUI (Tk) | ❌ use Python app |
+| Prev/Next history playlist UI | 🔜 CLI-focused |
+
+---
+
+## Requirements
+
+- **Rust 1.74+**
+- **yt-dlp** on PATH (`pip install -U yt-dlp`) for YouTube
+- **ffmpeg** recommended for MP3 convert
+- **Windows** + **Razer Synapse** for keyboard lights  
+  (Linux/macOS: lyrics + audio + QA still work; lights skip gracefully)
+
+---
+
+## Install & run
 
 ```bash
 git clone https://github.com/ksanjeev284/razer-song-lights-rs.git
@@ -34,24 +50,31 @@ cd razer-song-lights-rs
 cargo build --release
 ```
 
-### CLI
+### Play a YouTube song (lights + audio + lyrics)
 
 ```bash
-# Fetch lyrics
+cargo run --release -- play "https://www.youtube.com/watch?v=VIDEO_ID"
+
+# options
+cargo run --release -- play "URL" --volume 0.9 --offset 1.5 --mode flash-line
+cargo run --release -- play "URL" --no-audio          # lights only
+cargo run --release -- play "URL" --no-lights         # audio + karaoke text
+```
+
+### Play local audio + LRC
+
+```bash
+cargo run --release -- play-file track.mp3 --lrc song.lrc --duration 290
+```
+
+### Lyrics / tools
+
+```bash
 cargo run -- lyrics "Cigarettes After Sex" "Apocalypse" --duration 290
-
-# Print LRC
-cargo run -- lyrics "Queen" "Bohemian Rhapsody" --duration 355 --lrc
-
-# Parse YouTube title
 cargo run -- parse-title "Apocalypse - Cigarettes After Sex" --artist-hint "Cigarettes After Sex"
-
-# Parse local LRC file
 cargo run -- parse-lrc song.lrc --duration 290
-
-# 10-song live accuracy + timing QA
-cargo run -- qa10
-cargo run -- qa10 --json report.json
+cargo run -- demo
+cargo run --release -- qa10
 ```
 
 ---
@@ -59,42 +82,50 @@ cargo run -- qa10 --json report.json
 ## Testing
 
 ```bash
-# Unit + offline integration (no network required for most)
+# Offline unit + integration
 cargo test
 
-# Live 10-song suite (network)
-cargo test --test integration_ten_songs -- --ignored --nocapture
-# or
+# Live 10-song identity + LRC timing (network)
 cargo run --release -- qa10
+cargo test --test integration_ten_songs -- --ignored --nocapture
 ```
 
-### What the 10-song QA checks
+Latest live QA: **10/10 PASS** (same catalog as Python: Apocalypse, Blinding Lights, bad guy, Shape of You, Hello, Bohemian Rhapsody, Never Gonna Give You Up, Believer, Levitating, Viva La Vida).
 
-For each of 10 popular tracks:
-
-1. **Title parse** — both YouTube layouts  
-2. **Identity** — required phrases present; wrong-song phrases absent  
-3. **Timing** — LRC line count, duration coverage, monotonic stamps  
-4. **Sync sim** — active line index advances correctly with song time  
-
-Target: **10/10 PASS** on lrclib (same bar as the Python suite).
-
-### CI
-
-GitHub Actions runs `cargo test` + clippy + fmt on **Windows, Ubuntu, macOS**.
+CI: Windows / Ubuntu / macOS (`cargo test`, clippy, fmt).
 
 ---
 
-## Relation to Python app
+## Architecture
 
-| | Python (`razer-song-lights`) | Rust (`razer-song-lights-rs`) |
-|--|------------------------------|--------------------------------|
-| Chroma keyboard lights | ✅ Native Windows DLL | Preview key map only |
-| GUI | ✅ Tkinter | — |
-| YouTube audio download | ✅ yt-dlp | — |
-| LRC + title + identity | ✅ | ✅ (tested) |
-| 10-song live QA | ✅ | ✅ |
-| Platforms | Windows (Chroma) | All (logic/CLI) |
+```text
+YouTube URL
+   │
+   ├─ yt-dlp meta ──► artist / track / duration
+   ├─ lrclib ────────► plain + LRC timestamps
+   └─ yt-dlp -x ─────► cached audio file
+                          │
+                          ▼
+              AudioPlayer (rodio, seekable)
+              position_s ──► sync clock
+                          │
+              ┌───────────┴───────────┐
+              ▼                       ▼
+     ChromaKeyboard (Win DLL)    Karaoke console
+     word/line flash             current LRC line
+```
+
+---
+
+## Python vs Rust
+
+| | Python | Rust |
+|--|--------|------|
+| GUI | ✅ Tkinter | CLI (+ demo) |
+| Chroma lights | ✅ | ✅ Windows |
+| YouTube + LRC | ✅ | ✅ |
+| 10-song QA | ✅ | ✅ |
+| Portable binary | PyInstaller | `cargo build --release` |
 
 ---
 

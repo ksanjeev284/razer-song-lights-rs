@@ -1,8 +1,8 @@
 [package]
 name = "razer-song-lights-rs"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "Razer Chroma keyboard lyric light show — Rust core: LRC timing, title parse, lyrics identity, lrclib client"
+description = "Razer Chroma keyboard lyric light show — YouTube, audio, LRC sync, Chroma lights (Windows), full CLI"
 license = "MIT"
 repository = "https://github.com/ksanjeev284/razer-song-lights-rs"
 readme = "README.md"
@@ -13,11 +13,16 @@ rust-version = "1.74"
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
+ctrlc = "3.5.2"
+libloading = "0.8.9"
 regex = "1.11"
+rodio = { version = "0.21.1", features = ["symphonia-mp3", "symphonia-wav", "symphonia-isomp4"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+tempfile = "3.27.0"
 thiserror = "2.0"
 ureq = { version = "2.12", features = ["json"] }
+which = "8.0.4"
 
 [dev-dependencies]
 # (unit + integration tests use lib + ureq)
