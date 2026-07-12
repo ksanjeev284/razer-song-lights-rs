@@ -18,6 +18,8 @@ jobs:
   build:
     name: Build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
+    # Don't block the whole release if a scarce runner (e.g. macos-13) never starts.
+    continue-on-error: ${{ matrix.optional == true }}
     strategy:
       fail-fast: false
       matrix:
@@ -26,18 +28,23 @@ jobs:
             target: x86_64-pc-windows-msvc
             artifact: razer-song-lights-windows-x64.exe
             bin: razer-song-lights.exe
+            optional: false
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact: razer-song-lights-linux-x64
             bin: razer-song-lights
+            optional: false
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: razer-song-lights-macos-arm64
             bin: razer-song-lights
+            optional: false
+          # Optional: GitHub macos-13 runners are often long-queued on free tiers.
           - os: macos-13
             target: x86_64-apple-darwin
             artifact: razer-song-lights-macos-x64
             bin: razer-song-lights
+            optional: true
 
     steps:
       - uses: actions/checkout@v4
