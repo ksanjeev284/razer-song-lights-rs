@@ -12,6 +12,12 @@ pub struct SongMemoryEntry {
     pub offset: f32,
     pub resume_s: f64,
     pub plays: u32,
+    /// Free-form note for this song.
+    #[serde(default)]
+    pub note: String,
+    /// 0–5 star rating (0 = unset).
+    #[serde(default)]
+    pub rating: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -80,6 +86,30 @@ impl SongMemory {
             self.save();
         }
     }
+
+    pub fn set_note(&mut self, id: &str, note: &str) {
+        if id.is_empty() {
+            return;
+        }
+        self.by_id.entry(id.to_string()).or_default().note = note.to_string();
+        self.save();
+    }
+
+    pub fn set_rating(&mut self, id: &str, rating: u8) {
+        if id.is_empty() {
+            return;
+        }
+        self.by_id.entry(id.to_string()).or_default().rating = rating.min(5);
+        self.save();
+    }
+
+    pub fn note(&self, id: &str) -> String {
+        self.get(id).map(|e| e.note.clone()).unwrap_or_default()
+    }
+
+    pub fn rating(&self, id: &str) -> u8 {
+        self.get(id).map(|e| e.rating).unwrap_or(0)
+    }
 }
 
 /// Import URLs from a playlist text / m3u file.
@@ -116,5 +146,16 @@ mod tests {
         let t = "#EXTM3U\n#comment\nhttps://youtu.be/a\n\nhttps://youtu.be/b\n";
         let u = parse_playlist_urls(t);
         assert_eq!(u.len(), 2);
+    }
+
+    #[test]
+    fn notes_and_rating() {
+        let mut m = SongMemory::default();
+        m.set_note("vid", "great chorus");
+        m.set_rating("vid", 5);
+        assert_eq!(m.note("vid"), "great chorus");
+        assert_eq!(m.rating("vid"), 5);
+        m.set_rating("vid", 9);
+        assert_eq!(m.rating("vid"), 5);
     }
 }

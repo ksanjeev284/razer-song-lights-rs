@@ -4,13 +4,14 @@ use crate::cache::{
     cache_size_bytes, cached_song_count, clear_media_cache, default_cache_root, format_bytes,
     load_song_package, save_song_package, SongPackage,
 };
-use crate::chroma::is_chroma_supported;
+use crate::chroma::{is_chroma_supported, ChromaKeyboard};
 use crate::history::{load_history_packages, push_history, PlayQueue};
 use crate::lrc::lrc_quality_score;
 use crate::lrclib::fetch_lyrics;
 use crate::playlists::{timed_lines_to_lrc, PlaylistStore};
 use crate::settings::{AppSettings, Favorites};
 use crate::show::{build_timed_lines, start_show, PlayMode, ShowConfig, ShowHandle};
+use crate::song_catalog::SONG_CATALOG;
 use crate::song_memory::{export_playlist, parse_playlist_urls, SongMemory};
 use crate::stats::{Bookmarks, ListenStats};
 use crate::sync_sim::line_index_for_time;
@@ -164,6 +165,12 @@ struct SongLightsGui {
     search_busy: bool,
     auto_night_dim: bool,
     mirror_lights: bool,
+    fade_in: bool,
+    auto_skip_intro: bool,
+    hide_past_lyrics: bool,
+    search_history: Vec<String>,
+    song_note: String,
+    fade_in_until: Option<Instant>,
 }
 
 impl SongLightsGui {
@@ -273,6 +280,12 @@ impl SongLightsGui {
             search_busy: false,
             auto_night_dim: settings.auto_night_dim,
             mirror_lights: settings.mirror_lights,
+            fade_in: settings.fade_in,
+            auto_skip_intro: settings.auto_skip_intro,
+            hide_past_lyrics: settings.hide_past_lyrics,
+            search_history: settings.search_history,
+            song_note: String::new(),
+            fade_in_until: None,
         }
     }
 
@@ -317,6 +330,10 @@ impl SongLightsGui {
             ytdlp_cookies_browser: self.ytdlp_cookies_browser.clone(),
             auto_night_dim: self.auto_night_dim,
             mirror_lights: self.mirror_lights,
+            fade_in: self.fade_in,
+            auto_skip_intro: self.auto_skip_intro,
+            hide_past_lyrics: self.hide_past_lyrics,
+            search_history: self.search_history.clone(),
             ..AppSettings::default()
         };
         s.set_play_mode(self.mode);
@@ -502,13 +519,27 @@ impl SongLightsGui {
                     self.status =
                         format!("Resumed @ {} — {}", Self::fmt_time(resume), self.song_label);
                     self.song_memory.clear_resume(&self.video_id);
+                } else if self.auto_skip_intro {
+                    if let Ok(t) = h.skip_intro() {
+                        self.status =
+                            format!("Skip intro → {} — {}", Self::fmt_time(t), self.song_label);
+                    } else {
+                        self.status = format!("Playing — {}", self.song_label);
+                    }
                 } else {
                     self.status = format!("Playing — {}", self.song_label);
+                }
+                if self.fade_in {
+                    h.set_volume(0.0);
+                    self.fade_in_until = Some(Instant::now() + Duration::from_millis(900));
+                } else {
+                    self.fade_in_until = None;
                 }
                 self.stats.record_play(&self.song_label);
                 if !self.video_id.is_empty() {
                     self.song_memory.bump_plays(&self.video_id);
                 }
+                self.song_note = self.song_memory.note(&self.video_id);
                 self.show = Some(h);
                 self.was_ended = false;
                 self.prefetched = false;
@@ -517,6 +548,94 @@ impl SongLightsGui {
             Err(e) => self.error_popup = Some(format!("Play failed: {e}")),
         }
         self.persist_settings();
+    }
+
+    fn open_local_audio(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Audio", &["mp3", "m4a", "wav", "ogg", "flac", "opus"])
+            .pick_file()
+        {
+            self.audio_path = Some(path.clone());
+            self.synced_lrc = None;
+            let name = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Local audio".into());
+            self.song_label = format!("{name}  ·  local file");
+            self.video_id = format!("local:{}", name);
+            // Estimate duration unknown; keep existing or default 180s for plain timing
+            if self.duration_s < 5.0 {
+                self.duration_s = 180.0;
+            }
+            if self.lyrics_edit.trim().is_empty() {
+                self.lyrics_edit = name.clone();
+            }
+            self.timed_lines = build_timed_lines(&self.lyrics_edit, None, self.duration_s);
+            self.status = format!("Loaded local audio: {}", path.display());
+            self.song_note = self.song_memory.note(&self.video_id);
+        }
+    }
+
+    fn play_random_favorite(&mut self) {
+        let favs: Vec<_> = self
+            .queue
+            .songs
+            .iter()
+            .filter(|s| self.favorites.contains(&s.video_id))
+            .cloned()
+            .collect();
+        if favs.is_empty() {
+            self.error_popup = Some("No favorites in queue. Star songs with Ctrl+F.".into());
+            return;
+        }
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut h = DefaultHasher::new();
+        Instant::now().hash(&mut h);
+        let i = (h.finish() as usize) % favs.len();
+        self.apply_package(favs[i].clone(), true);
+        self.status = "Random favorite".into();
+    }
+
+    fn load_catalog_search(&mut self, artist: &str, track: &str) {
+        self.search_query = format!("{artist} {track}");
+        self.run_search();
+    }
+
+    fn chroma_test(&mut self) {
+        if !is_chroma_supported() {
+            self.error_popup = Some("Chroma not available on this platform.".into());
+            return;
+        }
+        thread::spawn(|| {
+            if let Ok(mut kb) = ChromaKeyboard::open() {
+                let _ = kb.test_sweep();
+            }
+        });
+        self.status = "Chroma test sweep…".into();
+    }
+
+    fn export_favorites_m3u(&mut self) {
+        let urls: Vec<String> = self
+            .queue
+            .songs
+            .iter()
+            .filter(|s| self.favorites.contains(&s.video_id) && !s.url.is_empty())
+            .map(|s| s.url.clone())
+            .collect();
+        if urls.is_empty() {
+            self.error_popup = Some("No favorite URLs to export.".into());
+            return;
+        }
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("M3U", &["m3u"])
+            .set_file_name("favorites.m3u")
+            .save_file()
+        {
+            if std::fs::write(&path, export_playlist(&urls)).is_ok() {
+                self.status = format!("Exported {} favorites", urls.len());
+            }
+        }
     }
 
     fn load_youtube(&mut self) {
@@ -723,6 +842,10 @@ impl SongLightsGui {
             self.error_popup = Some("Type a search query first.".into());
             return;
         }
+        self.search_history.retain(|x| x != &q);
+        self.search_history.insert(0, q.clone());
+        self.search_history.truncate(12);
+        self.persist_settings();
         self.search_busy = true;
         self.busy = true;
         self.status = format!("Searching YouTube: {q}…");
@@ -1234,6 +1357,24 @@ impl eframe::App for SongLightsGui {
         if self.fading_show.is_some() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
+        // Fade-in ramp
+        if let Some(until) = self.fade_in_until {
+            let now = Instant::now();
+            if now >= until {
+                if let Some(s) = &self.show {
+                    s.set_volume(self.volume);
+                }
+                self.fade_in_until = None;
+            } else {
+                let total = 0.9_f32;
+                let left = until.saturating_duration_since(now).as_secs_f32();
+                let progress = (1.0 - left / total).clamp(0.0, 1.0);
+                if let Some(s) = &self.show {
+                    s.set_volume(self.volume * progress);
+                }
+                ctx.request_repaint_after(Duration::from_millis(40));
+            }
+        }
 
         // Sleep timer (optional fade in last ~1.2s)
         if let Some(until) = self.sleep_until {
@@ -1276,13 +1417,14 @@ impl eframe::App for SongLightsGui {
 
         if let Some(show) = &self.show {
             show.set_offset(self.offset as f64);
-            // Don't fight sleep-fade volume ramp
+            // Don't fight sleep-fade or start fade-in volume ramps
             let sleep_fading = self
                 .sleep_until
                 .map(|u| u.saturating_duration_since(Instant::now()).as_secs_f32() < 1.4)
                 .unwrap_or(false)
                 && self.sleep_fade;
-            if !sleep_fading {
+            let fading_in = self.fade_in_until.is_some();
+            if !sleep_fading && !fading_in {
                 show.set_volume(self.volume);
             }
             show.set_theme(self.theme);
@@ -1376,6 +1518,7 @@ impl eframe::App for SongLightsGui {
                          S         Snap to nearest lyric\n\
                          R         Replay current lyric line\n\
                          Shift+←/→ Seek ±30s\n\
+                         Local     Open audio… for mp3/m4a without YouTube\n\
                          1–9       Jump to 10%–90%\n\
                          [ / ]     Offset −0.1s / +0.1s\n\
                          Ctrl+B    Bookmark position\n\
@@ -1403,6 +1546,22 @@ impl eframe::App for SongLightsGui {
                         if self.chroma_ok { ACCENT } else { DANGER },
                     );
                     ui.label(RichText::new(&self.status).color(DIM).size(12.5));
+                    if let Some(show) = &self.show {
+                        let left = (self.duration_s - show.position_s()).max(0.0);
+                        if self.duration_s > 0.0 && (show.is_running() || show.is_paused()) {
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.label(
+                                        RichText::new(format!("−{}", Self::fmt_time(left)))
+                                            .color(DIM)
+                                            .small()
+                                            .monospace(),
+                                    );
+                                },
+                            );
+                        }
+                    }
                 });
             });
 
@@ -1446,7 +1605,42 @@ impl eframe::App for SongLightsGui {
                             self.queue.move_current_to_top();
                             self.status = "Moved current to top".into();
                         }
+                        if ui.small_button("▲").on_hover_text("Move up").clicked() {
+                            self.queue.move_current_up();
+                        }
+                        if ui.small_button("▼").on_hover_text("Move down").clicked() {
+                            self.queue.move_current_down();
+                        }
                     });
+                    ui.horizontal(|ui| {
+                        if ui
+                            .small_button("🎲 Fav")
+                            .on_hover_text("Play random favorite")
+                            .clicked()
+                        {
+                            self.play_random_favorite();
+                        }
+                        if ui
+                            .small_button("Export ★")
+                            .on_hover_text("Export favorites M3U")
+                            .clicked()
+                        {
+                            self.export_favorites_m3u();
+                        }
+                    });
+                    ui.label(RichText::new("Demo catalog").color(DIM).small().strong());
+                    egui::ComboBox::from_id_salt("catalog_demo")
+                        .selected_text("Search catalog song…")
+                        .show_ui(ui, |ui| {
+                            for s in SONG_CATALOG {
+                                if ui
+                                    .selectable_label(false, format!("{} — {}", s.artist, s.track))
+                                    .clicked()
+                                {
+                                    self.load_catalog_search(s.artist, s.track);
+                                }
+                            }
+                        });
                     ui.horizontal(|ui| {
                         ui.add(
                             egui::TextEdit::singleline(&mut self.playlist_name)
@@ -1709,6 +1903,20 @@ impl eframe::App for SongLightsGui {
                                 ui.label(RichText::new("Searching…").color(DIM).small());
                             });
                         }
+                        if !self.search_history.is_empty() {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new("Recent searches").color(DIM).small());
+                                egui::ComboBox::from_id_salt("search_hist")
+                                    .selected_text("Pick…")
+                                    .show_ui(ui, |ui| {
+                                        for q in self.search_history.clone() {
+                                            if ui.selectable_label(false, &q).clicked() {
+                                                self.search_query = q;
+                                            }
+                                        }
+                                    });
+                            });
+                        }
                         if !self.search_hits.is_empty() {
                             ui.label(RichText::new("Results (click to play)").color(DIM).small());
                             let mut pick: Option<String> = None;
@@ -1947,6 +2155,20 @@ impl eframe::App for SongLightsGui {
                         if ui.small_button("Open file…").clicked() {
                             self.open_lyrics_file();
                         }
+                        if ui
+                            .small_button("Open audio…")
+                            .on_hover_text("Local mp3/m4a/wav")
+                            .clicked()
+                        {
+                            self.open_local_audio();
+                        }
+                        if ui
+                            .small_button("Chroma test")
+                            .on_hover_text("Sweep keyboard lights")
+                            .clicked()
+                        {
+                            self.chroma_test();
+                        }
                         if ui.small_button("Open URL").clicked() && !self.url.is_empty() {
                             let _ = open::that(self.url.trim());
                         }
@@ -2122,7 +2344,33 @@ impl eframe::App for SongLightsGui {
                             .hint_text("Filter…")
                             .desired_width(140.0),
                     );
+                    ui.checkbox(&mut self.hide_past_lyrics, "Hide past");
                 });
+                if !self.video_id.is_empty() {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Note").color(DIM).small());
+                        if ui
+                            .add(
+                                egui::TextEdit::singleline(&mut self.song_note)
+                                    .hint_text("Personal note…")
+                                    .desired_width(220.0),
+                            )
+                            .lost_focus()
+                        {
+                            self.song_memory
+                                .set_note(&self.video_id, &self.song_note);
+                        }
+                        ui.label(RichText::new("★").color(DIM).small());
+                        let rating = self.song_memory.rating(&self.video_id);
+                        for r in 1u8..=5 {
+                            let star = if r <= rating { "★" } else { "☆" };
+                            if ui.small_button(star).clicked() {
+                                let new_r = if r == rating { 0 } else { r };
+                                self.song_memory.set_rating(&self.video_id, new_r);
+                            }
+                        }
+                    });
+                }
 
                 egui::Frame::none()
                     .fill(Color32::from_rgb(0x0f, 0x0f, 0x13))
@@ -2136,6 +2384,12 @@ impl eframe::App for SongLightsGui {
                                 for (i, ln) in self.timed_lines.iter().enumerate() {
                                     if !filter.is_empty()
                                         && !ln.text.to_lowercase().contains(&filter)
+                                    {
+                                        continue;
+                                    }
+                                    if self.hide_past_lyrics
+                                        && self.active_line >= 0
+                                        && (i as isize) < self.active_line
                                     {
                                         continue;
                                     }
@@ -2344,6 +2598,8 @@ impl eframe::App for SongLightsGui {
                                     ui.checkbox(&mut self.remember_offset, "Remember offset");
                                     ui.checkbox(&mut self.crossfade_next, "Crossfade next");
                                     ui.checkbox(&mut self.sleep_fade, "Sleep fade");
+                                    ui.checkbox(&mut self.fade_in, "Fade in");
+                                    ui.checkbox(&mut self.auto_skip_intro, "Auto skip intro");
                                 });
                                 ui.horizontal(|ui| {
                                     ui.label(RichText::new("Vol preset").color(DIM).small());

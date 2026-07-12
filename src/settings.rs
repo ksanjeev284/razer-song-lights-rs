@@ -62,6 +62,18 @@ pub struct AppSettings {
     /// Mirror ambient light direction.
     #[serde(default)]
     pub mirror_lights: bool,
+    /// Soft volume fade-in when starting playback.
+    #[serde(default = "default_true")]
+    pub fade_in: bool,
+    /// Auto-seek to first lyric line when play starts (no resume).
+    #[serde(default)]
+    pub auto_skip_intro: bool,
+    /// Hide already-sung lines in the lyrics list.
+    #[serde(default)]
+    pub hide_past_lyrics: bool,
+    /// Recent search queries.
+    #[serde(default)]
+    pub search_history: Vec<String>,
 }
 
 fn default_cookies_browser() -> String {
@@ -109,6 +121,10 @@ impl Default for AppSettings {
             ytdlp_cookies_browser: default_cookies_browser(),
             auto_night_dim: false,
             mirror_lights: false,
+            fade_in: true,
+            auto_skip_intro: false,
+            hide_past_lyrics: false,
+            search_history: Vec::new(),
         }
     }
 }
@@ -116,6 +132,16 @@ impl Default for AppSettings {
 impl AppSettings {
     pub fn path() -> PathBuf {
         default_cache_root().join("settings.json")
+    }
+
+    pub fn push_search(&mut self, q: &str) {
+        let q = q.trim();
+        if q.is_empty() {
+            return;
+        }
+        self.search_history.retain(|x| x != q);
+        self.search_history.insert(0, q.to_string());
+        self.search_history.truncate(12);
     }
 
     pub fn load() -> Self {

@@ -98,6 +98,27 @@ impl ChromaKeyboard {
         self.push()
     }
 
+    /// Light the whole board (hardware check).
+    pub fn test_fill(&mut self, color: u32) -> Result<(), ChromaError> {
+        self.clear(color);
+        self.push()
+    }
+
+    /// Brief rainbow sweep for hardware test.
+    pub fn test_sweep(&mut self) -> Result<(), ChromaError> {
+        for i in 0..MAX_COL {
+            self.clear(0);
+            let c = color_for_index(i);
+            for r in 0..MAX_ROW {
+                self.set_key(r, i, c);
+            }
+            self.push()?;
+            std::thread::sleep(std::time::Duration::from_millis(35));
+        }
+        self.clear(0);
+        self.push()
+    }
+
     fn dim_color(c: u32, f: f32) -> u32 {
         let f = f.clamp(0.0, 1.0);
         let r = ((c & 0xFF) as f32 * f) as u32;

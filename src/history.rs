@@ -165,6 +165,40 @@ impl PlayQueue {
         self.index = 0;
     }
 
+    /// Swap current with previous (move up in list).
+    pub fn move_current_up(&mut self) {
+        if self.index <= 0 {
+            return;
+        }
+        let i = self.index as usize;
+        self.songs.swap(i, i - 1);
+        self.index -= 1;
+    }
+
+    /// Swap current with next (move down in list).
+    pub fn move_current_down(&mut self) {
+        if self.index < 0 {
+            return;
+        }
+        let i = self.index as usize;
+        if i + 1 >= self.songs.len() {
+            return;
+        }
+        self.songs.swap(i, i + 1);
+        self.index += 1;
+    }
+
+    /// Random index different from current when possible.
+    pub fn random_index(&self) -> Option<usize> {
+        if self.songs.is_empty() {
+            return None;
+        }
+        if self.songs.len() == 1 {
+            return Some(0);
+        }
+        self.next_index(true)
+    }
+
     /// Next index, optionally shuffled (not current).
     pub fn next_index(&self, shuffle: bool) -> Option<usize> {
         if self.songs.is_empty() {

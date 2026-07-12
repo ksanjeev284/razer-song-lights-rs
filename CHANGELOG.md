@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.10.0] — unreleased
+
+### Features
+- **Fade-in** on play start
+- **Auto skip intro** to first lyric
+- **Hide past lyrics** in list
+- **Local audio open** (mp3/m4a/wav/…)
+- **Song notes + ★ rating** (per video id)
+- **Queue ▲/▼** reorder current
+- **Random favorite** + export favorites M3U
+- **Demo catalog** → YouTube search
+- **Chroma hardware test** sweep
+- **Search history** dropdown
+- **Time remaining** on status bar
+
+### Notes
+- Not published as a GitHub release yet (local / master only)
+
+---
+
 ## [0.9.0] — 2026-07-13
 
 ### Features
