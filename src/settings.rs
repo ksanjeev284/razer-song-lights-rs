@@ -50,6 +50,21 @@ pub struct AppSettings {
     pub sleep_fade: bool,
     #[serde(default)]
     pub seek_snap: bool,
+    /// Path to Netscape cookies.txt for yt-dlp (YouTube bot check).
+    #[serde(default)]
+    pub ytdlp_cookies_file: String,
+    /// Browser for `--cookies-from-browser` (chrome|edge|firefox|brave|none).
+    #[serde(default = "default_cookies_browser")]
+    pub ytdlp_cookies_browser: String,
+}
+
+fn default_cookies_browser() -> String {
+    // Auto-use Chrome cookies on Windows when user is logged into YouTube.
+    if cfg!(windows) {
+        "chrome".into()
+    } else {
+        "none".into()
+    }
 }
 
 fn default_true() -> bool {
@@ -84,6 +99,8 @@ impl Default for AppSettings {
             ambient_effect: AmbientEffect::Pulse,
             sleep_fade: true,
             seek_snap: false,
+            ytdlp_cookies_file: String::new(),
+            ytdlp_cookies_browser: default_cookies_browser(),
         }
     }
 }

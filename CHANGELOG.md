@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.5] — 2026-07-12
+
+### Fixes
+- **YouTube “Please sign in”**: yt-dlp cookie support
+  - GUI: **YT cookies** browser (chrome/edge/firefox/…) + cookies.txt picker
+  - Auto-try browser cookies + `player_client=android,web`
+  - Env: `YTDLP_COOKIES`, `YTDLP_COOKIES_FROM_BROWSER`
+  - Default file: cache `youtube_cookies.txt`
+  - Clearer error text when bot-check still fails
+
 ## [0.8.4] — 2026-07-12
 
 ### Fixes

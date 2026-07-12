@@ -16,7 +16,9 @@ use crate::stats::{Bookmarks, ListenStats};
 use crate::sync_sim::line_index_for_time;
 use crate::themes::{AmbientEffect, LightTheme, RepeatMode};
 use crate::title::is_youtube_url;
-use crate::youtube::{download_audio, extract_meta};
+use crate::youtube::{
+    download_audio_with_auth, extract_meta_with_auth, YtdlpAuth, COOKIE_BROWSERS,
+};
 use crate::VERSION;
 use eframe::egui::{self, Color32, Key, Modifiers, RichText, ScrollArea, Sense, Vec2};
 use std::path::PathBuf;
@@ -153,6 +155,8 @@ struct SongLightsGui {
     seek_snap: bool,
     playlists: PlaylistStore,
     playlist_name: String,
+    ytdlp_cookies_file: String,
+    ytdlp_cookies_browser: String,
 }
 
 impl SongLightsGui {
@@ -255,7 +259,20 @@ impl SongLightsGui {
             seek_snap: settings.seek_snap,
             playlists: PlaylistStore::load(),
             playlist_name: String::new(),
+            ytdlp_cookies_file: settings.ytdlp_cookies_file,
+            ytdlp_cookies_browser: settings.ytdlp_cookies_browser,
         }
+    }
+
+    fn ytdlp_auth(&self) -> YtdlpAuth {
+        YtdlpAuth::resolve(
+            if self.ytdlp_cookies_file.trim().is_empty() {
+                None
+            } else {
+                Some(self.ytdlp_cookies_file.as_str())
+            },
+            Some(self.ytdlp_cookies_browser.as_str()),
+        )
     }
 
     fn persist_settings(&self) {
@@ -284,6 +301,8 @@ impl SongLightsGui {
             ambient_effect: self.ambient_effect,
             sleep_fade: self.sleep_fade,
             seek_snap: self.seek_snap,
+            ytdlp_cookies_file: self.ytdlp_cookies_file.clone(),
+            ytdlp_cookies_browser: self.ytdlp_cookies_browser.clone(),
             ..AppSettings::default()
         };
         s.set_play_mode(self.mode);
@@ -478,6 +497,7 @@ impl SongLightsGui {
 
         let want_audio = self.play_audio;
         let use_cache = self.cache_music;
+        let auth = self.ytdlp_auth();
         let (tx, rx) = mpsc::channel();
         self.load_rx = Some(rx);
         thread::spawn(move || {
@@ -487,8 +507,11 @@ impl SongLightsGui {
                 let _ = tx.send(m);
             };
 
-            send(LoadMsg::Status("Fetching YouTube metadata…".into()));
-            let meta = match extract_meta(&url) {
+            send(LoadMsg::Status(format!(
+                "Fetching YouTube metadata… ({})",
+                auth.describe()
+            )));
+            let meta = match extract_meta_with_auth(&url, &auth) {
                 Ok(m) => m,
                 Err(e) => {
                     send(LoadMsg::Err(e.to_string()));
@@ -514,7 +537,9 @@ impl SongLightsGui {
                             .unwrap_or(true)
                     {
                         send(LoadMsg::Status("Downloading audio…".into()));
-                        if let Ok(p) = download_audio(&meta.url, &meta.video_id, &audio_dir) {
+                        if let Ok(p) =
+                            download_audio_with_auth(&meta.url, &meta.video_id, &audio_dir, &auth)
+                        {
                             pkg.audio_path = Some(p.display().to_string());
                         }
                     }
@@ -546,8 +571,11 @@ impl SongLightsGui {
 
             let mut audio_path = None;
             if want_audio {
-                send(LoadMsg::Status("Downloading audio…".into()));
-                match download_audio(&meta.url, &meta.video_id, &audio_dir) {
+                send(LoadMsg::Status(format!(
+                    "Downloading audio… ({})",
+                    auth.describe()
+                )));
+                match download_audio_with_auth(&meta.url, &meta.video_id, &audio_dir, &auth) {
                     Ok(p) => audio_path = Some(p.display().to_string()),
                     Err(e) => send(LoadMsg::Status(format!("Audio skip: {e}"))),
                 }
@@ -1197,9 +1225,15 @@ impl eframe::App for SongLightsGui {
                                 pkg.video_id.clone(),
                             ) {
                                 if !vid.is_empty() {
+                                    let auth = self.ytdlp_auth();
                                     thread::spawn(move || {
                                         let root = default_cache_root();
-                                        let _ = download_audio(&url, &vid, &root.join("audio"));
+                                        let _ = download_audio_with_auth(
+                                            &url,
+                                            &vid,
+                                            &root.join("audio"),
+                                            &auth,
+                                        );
                                     });
                                 }
                             }
@@ -2128,6 +2162,55 @@ impl eframe::App for SongLightsGui {
                                     }
                                     if ui.small_button("F1 Help").clicked() {
                                         self.show_help = true;
+                                    }
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new("YT cookies").color(DIM).small());
+                                    egui::ComboBox::from_id_salt("yt_cookies_browser")
+                                        .selected_text(&self.ytdlp_cookies_browser)
+                                        .width(90.0)
+                                        .show_ui(ui, |ui| {
+                                            for b in COOKIE_BROWSERS {
+                                                if ui
+                                                    .selectable_value(
+                                                        &mut self.ytdlp_cookies_browser,
+                                                        (*b).to_string(),
+                                                        *b,
+                                                    )
+                                                    .changed()
+                                                {
+                                                    self.persist_settings();
+                                                    self.status = format!(
+                                                        "YouTube cookies: browser = {b}"
+                                                    );
+                                                }
+                                            }
+                                        });
+                                    if ui
+                                        .small_button("cookies.txt…")
+                                        .on_hover_text(
+                                            "Pick Netscape cookies.txt exported while logged into YouTube",
+                                        )
+                                        .clicked()
+                                    {
+                                        if let Some(path) = rfd::FileDialog::new()
+                                            .add_filter("Cookies", &["txt"])
+                                            .pick_file()
+                                        {
+                                            self.ytdlp_cookies_file =
+                                                path.display().to_string();
+                                            self.persist_settings();
+                                            self.status = format!(
+                                                "Cookies file: {}",
+                                                self.ytdlp_cookies_file
+                                            );
+                                        }
+                                    }
+                                    if !self.ytdlp_cookies_file.is_empty()
+                                        && ui.small_button("Clear file").clicked()
+                                    {
+                                        self.ytdlp_cookies_file.clear();
+                                        self.persist_settings();
                                     }
                                 });
                                 ui.horizontal(|ui| {

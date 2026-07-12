@@ -23,6 +23,16 @@ cargo run --release
 
 **Notes:** Razer Chroma keyboard lights require Windows + Razer Synapse. Audio/lyrics work on all platforms. Linux needs `yt-dlp` on `PATH` for YouTube.
 
+### YouTube “Please sign in” / bot check
+
+YouTube often blocks anonymous downloads. The app supports yt-dlp cookies:
+
+1. **Easiest (Windows):** in the app set **YT cookies → chrome** or **edge** (stay logged into YouTube in that browser).
+2. **cookies.txt:** export Netscape cookies (browser extension “Get cookies.txt LOCALLY”) while on youtube.com, then **cookies.txt…** in the app — or put the file at  
+   `%LOCALAPPDATA%\razer-song-lights\youtube_cookies.txt`
+3. **Env vars:** `YTDLP_COOKIES=C:\path\cookies.txt` or `YTDLP_COOKIES_FROM_BROWSER=chrome`
+4. Keep yt-dlp updated: `pip install -U yt-dlp`
+
 ---
 
 ## Highlights (v0.8)
