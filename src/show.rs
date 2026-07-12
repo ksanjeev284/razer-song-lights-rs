@@ -1,9 +1,10 @@
 //! Coordinate audio + LRC karaoke lights (seek-safe) + optional console display.
 
 use crate::audio::AudioPlayer;
-use crate::chroma::{color_for_index, ChromaKeyboard};
+use crate::chroma::ChromaKeyboard;
 use crate::lrc::{lines_to_timed_words, parse_lrc_lines, TimedLine, TimedWord};
 use crate::sync_sim::{line_index_for_time, word_index_for_time};
+use crate::themes::{themed_color, LightTheme, RepeatMode};
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,6 +27,9 @@ pub struct ShowConfig {
     pub lights: bool,
     pub karaoke_console: bool,
     pub loop_play: bool,
+    pub repeat: RepeatMode,
+    pub theme: LightTheme,
+    pub brightness: f32,
 }
 
 impl Default for ShowConfig {
@@ -38,6 +42,9 @@ impl Default for ShowConfig {
             lights: true,
             karaoke_console: true,
             loop_play: false,
+            repeat: RepeatMode::Off,
+            theme: LightTheme::Rainbow,
+            brightness: 1.0,
         }
     }
 }
@@ -51,6 +58,8 @@ pub struct ShowHandle {
     lines: Arc<Vec<TimedLine>>,
     duration_s: f64,
     offset_s: Arc<std::sync::atomic::AtomicU64>, // f64 bits
+    theme: Arc<std::sync::atomic::AtomicU8>,
+    brightness: Arc<std::sync::atomic::AtomicU32>, // f32 bits 0..1
 }
 
 impl ShowHandle {
@@ -162,6 +171,15 @@ impl ShowHandle {
             .store(offset.to_bits(), Ordering::Relaxed);
     }
 
+    pub fn set_theme(&self, theme: LightTheme) {
+        self.theme.store(theme.index(), Ordering::Relaxed);
+    }
+
+    pub fn set_brightness(&self, b: f32) {
+        self.brightness
+            .store(b.clamp(0.05, 1.0).to_bits(), Ordering::Relaxed);
+    }
+
     fn offset(&self) -> f64 {
         f64::from_bits(self.offset_s.load(Ordering::Relaxed))
     }
@@ -246,6 +264,10 @@ fn start_show_with_stop(
     let offset_s = Arc::new(std::sync::atomic::AtomicU64::new(
         cfg.sync_offset_s.to_bits(),
     ));
+    let theme = Arc::new(std::sync::atomic::AtomicU8::new(cfg.theme.index()));
+    let brightness = Arc::new(std::sync::atomic::AtomicU32::new(
+        cfg.brightness.clamp(0.05, 1.0).to_bits(),
+    ));
     let ended = Arc::new(AtomicBool::new(false));
 
     let audio = if cfg.play_audio {
@@ -267,6 +289,8 @@ fn start_show_with_stop(
     let cfg = cfg.clone();
     let stop_thread = stop.clone();
     let offset_thread = offset_s.clone();
+    let theme_thread = theme.clone();
+    let bright_thread = brightness.clone();
     let ended_thread = ended.clone();
     let duration = duration_s;
 
@@ -280,6 +304,8 @@ fn start_show_with_stop(
             &cfg,
             stop_thread,
             offset_thread,
+            theme_thread,
+            bright_thread,
             ended_thread,
         );
     });
@@ -292,6 +318,8 @@ fn start_show_with_stop(
         lines: lines_arc,
         duration_s,
         offset_s,
+        theme,
+        brightness,
     })
 }
 
@@ -304,6 +332,8 @@ fn run_engine(
     cfg: &ShowConfig,
     stop: Arc<AtomicBool>,
     offset_s: Arc<std::sync::atomic::AtomicU64>,
+    theme: Arc<std::sync::atomic::AtomicU8>,
+    brightness: Arc<std::sync::atomic::AtomicU32>,
     ended: Arc<AtomicBool>,
 ) {
     let mut chroma = if cfg.lights && crate::chroma::is_chroma_supported() {
@@ -348,7 +378,8 @@ fn run_engine(
                 continue;
             }
             if !a.is_playing() && a.get_position_s() > 0.5 {
-                if cfg.loop_play {
+                let repeat_one = cfg.loop_play || cfg.repeat == RepeatMode::One;
+                if repeat_one {
                     let _ = a.seek(0.0);
                     last_word = -1;
                     last_line = -1;
@@ -363,7 +394,8 @@ fn run_engine(
         };
 
         if duration_s > 0.0 && pos >= duration_s - 0.1 {
-            if cfg.loop_play {
+            let repeat_one = cfg.loop_play || cfg.repeat == RepeatMode::One;
+            if repeat_one {
                 if let Some(a) = audio {
                     let _ = a.seek(0.0);
                 }
@@ -376,6 +408,8 @@ fn run_engine(
         }
 
         let offset = f64::from_bits(offset_s.load(Ordering::Relaxed));
+        let th = LightTheme::from_index(theme.load(Ordering::Relaxed));
+        let bright = f32::from_bits(brightness.load(Ordering::Relaxed)).clamp(0.05, 1.0);
         let mut did_work = false;
 
         // Karaoke console
@@ -406,7 +440,7 @@ fn run_engine(
                         last_line = idx;
                         did_work = true;
                         let i = idx as usize;
-                        let color = color_for_index(i);
+                        let color = themed_color(th, i, bright);
                         let _ = kb.flash_text_hit(&lines[i].text, color);
                     }
                 }
@@ -415,7 +449,7 @@ fn run_engine(
                         if i as isize != last_word {
                             last_word = i as isize;
                             did_work = true;
-                            let color = color_for_index(i);
+                            let color = themed_color(th, i, bright);
                             let _ = kb.flash_text_hit(&words[i].word, color);
                         }
                     }

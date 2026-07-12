@@ -1,4 +1,4 @@
-//! Persistent user preferences.
+//! Persistent user preferences + recent URLs.
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use crate::cache::default_cache_root;
 use crate::show::PlayMode;
+use crate::themes::{LightTheme, RepeatMode};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
@@ -19,6 +20,20 @@ pub struct AppSettings {
     pub speed: f32,
     pub mode: String,
     pub show_history_panel: bool,
+    #[serde(default)]
+    pub brightness: f32,
+    #[serde(default)]
+    pub theme: LightTheme,
+    #[serde(default)]
+    pub repeat: RepeatMode,
+    #[serde(default)]
+    pub shuffle: bool,
+    #[serde(default)]
+    pub always_on_top: bool,
+    #[serde(default)]
+    pub mini_player: bool,
+    #[serde(default)]
+    pub recent_urls: Vec<String>,
 }
 
 impl Default for AppSettings {
@@ -34,6 +49,13 @@ impl Default for AppSettings {
             speed: 1.0,
             mode: "flash_word".into(),
             show_history_panel: true,
+            brightness: 1.0,
+            theme: LightTheme::Rainbow,
+            repeat: RepeatMode::Off,
+            shuffle: false,
+            always_on_top: false,
+            mini_player: false,
+            recent_urls: Vec::new(),
         }
     }
 }
@@ -73,6 +95,16 @@ impl AppSettings {
             PlayMode::FlashLine => "flash_line".into(),
             PlayMode::FlashWord => "flash_word".into(),
         };
+    }
+
+    pub fn push_recent_url(&mut self, url: &str) {
+        let url = url.trim();
+        if url.is_empty() {
+            return;
+        }
+        self.recent_urls.retain(|u| u != url);
+        self.recent_urls.insert(0, url.to_string());
+        self.recent_urls.truncate(12);
     }
 }
 
@@ -142,5 +174,15 @@ mod tests {
         assert!(f.contains("abc123"));
         assert!(!f.toggle("abc123"));
         assert!(!f.contains("abc123"));
+    }
+
+    #[test]
+    fn recent_urls() {
+        let mut s = AppSettings::default();
+        s.push_recent_url("https://youtu.be/a");
+        s.push_recent_url("https://youtu.be/b");
+        s.push_recent_url("https://youtu.be/a");
+        assert_eq!(s.recent_urls[0], "https://youtu.be/a");
+        assert_eq!(s.recent_urls.len(), 2);
     }
 }

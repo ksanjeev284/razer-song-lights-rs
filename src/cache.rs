@@ -90,6 +90,68 @@ pub fn load_song_package(root: &Path, video_id: &str) -> Option<SongPackage> {
     Some(song)
 }
 
+/// Bytes used by songs/ + audio/ under the cache root.
+pub fn cache_size_bytes(root: &Path) -> u64 {
+    fn walk(dir: &Path) -> u64 {
+        let mut total = 0u64;
+        let Ok(rd) = fs::read_dir(dir) else {
+            return 0;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                total += walk(&p);
+            } else if let Ok(m) = e.metadata() {
+                total += m.len();
+            }
+        }
+        total
+    }
+    walk(root)
+}
+
+pub fn format_bytes(n: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    let x = n as f64;
+    if x >= GB {
+        format!("{:.2} GB", x / GB)
+    } else if x >= MB {
+        format!("{:.1} MB", x / MB)
+    } else if x >= KB {
+        format!("{:.0} KB", x / KB)
+    } else {
+        format!("{n} B")
+    }
+}
+
+/// Delete cached songs + audio (keeps settings/favorites/history files).
+pub fn clear_media_cache(root: &Path) -> std::io::Result<(u64, u64)> {
+    let before = cache_size_bytes(root);
+    for sub in ["songs", "audio"] {
+        let p = root.join(sub);
+        if p.is_dir() {
+            let _ = fs::remove_dir_all(&p);
+            let _ = fs::create_dir_all(&p);
+        }
+    }
+    let after = cache_size_bytes(root);
+    Ok((before, after))
+}
+
+/// Count song packages on disk.
+pub fn cached_song_count(root: &Path) -> usize {
+    let dir = root.join("songs");
+    fs::read_dir(dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().map(|x| x == "json").unwrap_or(false))
+                .count()
+        })
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

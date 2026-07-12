@@ -216,6 +216,7 @@ fn main() -> Result<()> {
                 karaoke_console: true,
                 sync_offset_s: 0.0,
                 loop_play: false,
+                ..ShowConfig::default()
             };
             run_show(
                 "hello world\nlights on stage\nsing with me",
@@ -357,6 +358,7 @@ fn play_command(
         lights: !no_lights,
         karaoke_console: true,
         loop_play: false,
+        ..ShowConfig::default()
     };
     run_show(
         &hit.plain,
@@ -402,6 +404,7 @@ fn play_file(
         lights: !no_lights,
         karaoke_console: true,
         loop_play: false,
+        ..ShowConfig::default()
     };
     run_show(
         &plain,

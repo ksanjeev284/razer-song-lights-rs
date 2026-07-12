@@ -121,6 +121,35 @@ impl PlayQueue {
     pub fn can_next(&self) -> bool {
         self.index >= 0 && (self.index as usize) + 1 < self.songs.len()
     }
+
+    /// Next index, optionally shuffled (not current).
+    pub fn next_index(&self, shuffle: bool) -> Option<usize> {
+        if self.songs.is_empty() {
+            return None;
+        }
+        if shuffle && self.songs.len() > 1 {
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut h = DefaultHasher::new();
+            self.index.hash(&mut h);
+            self.songs.len().hash(&mut h);
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+                .hash(&mut h);
+            let mut idx = (h.finish() as usize) % self.songs.len();
+            if idx as isize == self.index {
+                idx = (idx + 1) % self.songs.len();
+            }
+            return Some(idx);
+        }
+        if self.can_next() {
+            Some(self.index as usize + 1)
+        } else {
+            None
+        }
+    }
 }
 
 #[cfg(test)]

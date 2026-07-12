@@ -1,39 +1,10 @@
 # razer-song-lights-rs
 
-**Full Razer Song Lights app in Rust** — optimized GUI + CLI.
+**Full Razer Song Lights app in Rust** — GUI + CLI + Chroma lights.
 
-**v0.4.0** — more features, lower CPU, seek-safe binary-search sync.
+**v0.5.0** — more player features (themes, karaoke fullscreen, sleep timer, cache tools, …)
 
-Repo: https://github.com/ksanjeev284/razer-song-lights-rs
-
----
-
-## Features
-
-| Feature | |
-|--------|--|
-| Desktop GUI (dark Razer theme) | ✅ |
-| YouTube Load + Play + cache | ✅ |
-| Audio: play / pause / stop / mute / speed 0.5–1.5× | ✅ |
-| Seek ±10s + scrub bar | ✅ |
-| Prev / Next history + **Library panel** | ✅ |
-| **Favorites** (Ctrl+F / ★) | ✅ |
-| Karaoke scroll + lyric filter + copy | ✅ |
-| Auto-next when track ends | ✅ |
-| Settings saved between sessions | ✅ |
-| Keyboard shortcuts | ✅ |
-| Chroma lights (Windows) | ✅ |
-| CLI + 10-song QA | ✅ |
-
-### Keyboard shortcuts
-
-| Key | Action |
-|-----|--------|
-| **Space** | Pause / Resume (or Play) |
-| **← / →** | Seek −10s / +10s |
-| **M** | Mute toggle |
-| **Ctrl+F** | Favorite current song |
-| **Ctrl+O** | Open lyrics file |
+https://github.com/ksanjeev284/razer-song-lights-rs
 
 ---
 
@@ -43,26 +14,31 @@ Repo: https://github.com/ksanjeev284/razer-song-lights-rs
 cargo run --release
 ```
 
-Requires: **yt-dlp**, **ffmpeg** (recommended), **Razer Synapse** on Windows for lights.
+Needs **yt-dlp**, **ffmpeg** (recommended), **Razer Synapse** (Windows lights).
 
 ---
 
-## Optimizations (0.4)
+## Features
 
-- **O(log n)** binary search for LRC line/word index (long songs)
-- **Adaptive engine sleep** — lower CPU when idle between lyric events
-- **Atomic offset** (no mutex on hot path)
-- **Pause-aware** audio clock (no position drift)
-- **Seek-safe** light index (works after scrub / reverse seek)
-- Fewer redundant Chroma flashes (only on line/word change)
+| Area | Features |
+|------|----------|
+| **Playback** | Play / Pause / Stop / Mute / Speed 0.5–1.5× / Scrub / ±10s |
+| **Queue** | Prev / Next / History / Favorites / Shuffle / Repeat Off·One·All / Auto-next |
+| **YouTube** | Load + Play, cache, recent URLs dropdown |
+| **Karaoke** | Scrolling lyrics, filter, click-line-to-seek, F11 fullscreen, export LRC |
+| **Lights** | Word/Line modes, 8 color themes, brightness, live updates |
+| **Extras** | Sleep timer 15/30/60m, always-on-top, mini player, clear cache, saved prefs |
+| **Shortcuts** | Space · ←/→ · M · Ctrl+F · Ctrl+O · F11 |
+
+### Light themes
+Rainbow · Razer Green · Fire · Ice · Purple · Gold · Pink · White
 
 ---
 
 ## Tests
 
 ```bash
-cargo test          # 35 offline tests
-cargo run -- qa10   # live 10-song accuracy
+cargo test   # 38 offline tests
 ```
 
 ---

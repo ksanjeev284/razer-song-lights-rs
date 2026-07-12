@@ -1,7 +1,8 @@
 //! Full desktop GUI (egui) — optimized with pause, mute, speed, shortcuts, favorites.
 
 use crate::cache::{
-    default_cache_root, load_song_package, save_song_package, SongPackage,
+    cache_size_bytes, cached_song_count, clear_media_cache, default_cache_root, format_bytes,
+    load_song_package, save_song_package, SongPackage,
 };
 use crate::chroma::is_chroma_supported;
 use crate::history::{load_history_packages, push_history, PlayQueue};
@@ -9,6 +10,7 @@ use crate::lrclib::fetch_lyrics;
 use crate::settings::{AppSettings, Favorites};
 use crate::show::{build_timed_lines, start_show, PlayMode, ShowConfig, ShowHandle};
 use crate::sync_sim::line_index_for_time;
+use crate::themes::{LightTheme, RepeatMode};
 use crate::title::is_youtube_url;
 use crate::youtube::{download_audio, extract_meta};
 use crate::VERSION;
@@ -16,6 +18,7 @@ use eframe::egui::{self, Color32, Key, Modifiers, RichText, ScrollArea, Sense, V
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
+use std::time::{Duration, Instant};
 
 const ACCENT: Color32 = Color32::from_rgb(0x44, 0xd6, 0x2c);
 const BG: Color32 = Color32::from_rgb(0x0b, 0x0b, 0x0d);
@@ -74,8 +77,16 @@ struct SongLightsGui {
     volume: f32,
     offset: f32,
     speed: f32,
+    brightness: f32,
     mode: PlayMode,
+    theme: LightTheme,
+    repeat: RepeatMode,
+    shuffle: bool,
     show_history: bool,
+    always_on_top: bool,
+    mini_player: bool,
+    fullscreen_karaoke: bool,
+    recent_urls: Vec<String>,
 
     show: Option<ShowHandle>,
     queue: PlayQueue,
@@ -91,6 +102,8 @@ struct SongLightsGui {
     chroma_ok: bool,
     error_popup: Option<String>,
     was_ended: bool,
+    sleep_until: Option<Instant>,
+    cache_label: String,
 }
 
 impl SongLightsGui {
@@ -105,12 +118,19 @@ impl SongLightsGui {
             queue.index = queue.songs.len() as isize - 1;
         }
 
+        let root = default_cache_root();
+        let cache_label = format!(
+            "Cache: {} · {} songs",
+            format_bytes(cache_size_bytes(&root)),
+            cached_song_count(&root)
+        );
+
         Self {
             url: String::new(),
             lyrics_edit: "hello world\nlights on stage\nsing with me".into(),
             song_label: "No song loaded — paste a YouTube link".into(),
             status: format!(
-                "Ready · shortcuts: Space pause · ←/→ seek · Ctrl+O file · {}",
+                "Ready · Space pause · ←/→ seek · F11 karaoke · {}",
                 if is_chroma_supported() {
                     "Chroma OK"
                 } else {
@@ -130,8 +150,16 @@ impl SongLightsGui {
             volume: settings.volume,
             offset: settings.offset,
             speed: settings.speed.clamp(0.5, 1.5),
+            brightness: settings.brightness.clamp(0.05, 1.0),
             mode: settings.play_mode(),
+            theme: settings.theme,
+            repeat: settings.repeat,
+            shuffle: settings.shuffle,
             show_history: settings.show_history_panel,
+            always_on_top: settings.always_on_top,
+            mini_player: settings.mini_player,
+            fullscreen_karaoke: false,
+            recent_urls: settings.recent_urls,
             show: None,
             queue,
             favorites: Favorites::load(),
@@ -145,6 +173,8 @@ impl SongLightsGui {
             chroma_ok: is_chroma_supported(),
             error_popup: None,
             was_ended: false,
+            sleep_until: None,
+            cache_label,
         }
     }
 
@@ -159,10 +189,26 @@ impl SongLightsGui {
             offset: self.offset,
             speed: self.speed,
             show_history_panel: self.show_history,
+            brightness: self.brightness,
+            theme: self.theme,
+            repeat: self.repeat,
+            shuffle: self.shuffle,
+            always_on_top: self.always_on_top,
+            mini_player: self.mini_player,
+            recent_urls: self.recent_urls.clone(),
             ..AppSettings::default()
         };
         s.set_play_mode(self.mode);
         s.save();
+    }
+
+    fn refresh_cache_label(&mut self) {
+        let root = default_cache_root();
+        self.cache_label = format!(
+            "Cache: {} · {} songs",
+            format_bytes(cache_size_bytes(&root)),
+            cached_song_count(&root)
+        );
     }
 
     fn stop_show(&mut self) {
@@ -200,7 +246,10 @@ impl SongLightsGui {
             play_audio: self.play_audio && self.audio_path.is_some(),
             lights: self.lights,
             karaoke_console: false,
-            loop_play: self.loop_play,
+            loop_play: self.loop_play || self.repeat == RepeatMode::One,
+            repeat: self.repeat,
+            theme: self.theme,
+            brightness: self.brightness,
         };
 
         match start_show(
@@ -212,6 +261,8 @@ impl SongLightsGui {
         ) {
             Ok(h) => {
                 let _ = h.set_speed(self.speed);
+                h.set_theme(self.theme);
+                h.set_brightness(self.brightness);
                 self.status = format!("Playing — {}", self.song_label);
                 self.show = Some(h);
                 self.was_ended = false;
@@ -236,6 +287,12 @@ impl SongLightsGui {
         }
         self.busy = true;
         self.status = "Loading YouTube song…".into();
+        // Track recent URLs
+        self.recent_urls.retain(|u| u != &url);
+        self.recent_urls.insert(0, url.clone());
+        self.recent_urls.truncate(12);
+        self.persist_settings();
+
         let want_audio = self.play_audio;
         let use_cache = self.cache_music;
         let (tx, rx) = mpsc::channel();
@@ -426,15 +483,42 @@ impl SongLightsGui {
     }
 
     fn next_song(&mut self) {
-        if !self.queue.can_next() {
+        // Repeat all: wrap; shuffle: random; else sequential
+        let idx = if self.shuffle {
+            self.queue.next_index(true)
+        } else if self.queue.can_next() {
+            Some(self.queue.index as usize + 1)
+        } else if self.repeat == RepeatMode::All && !self.queue.songs.is_empty() {
+            Some(0)
+        } else {
+            None
+        };
+        let Some(i) = idx else {
             self.status = "No next song".into();
             return;
-        }
-        self.queue.index += 1;
+        };
+        self.queue.index = i as isize;
         if let Some(pkg) = self.queue.current().cloned() {
             let name = pkg.display_name();
             self.apply_package(pkg, true);
             self.status = format!("Next: {name}");
+        }
+    }
+
+    fn export_lrc(&mut self) {
+        let Some(lrc) = &self.synced_lrc else {
+            self.error_popup = Some("No synced LRC to export.".into());
+            return;
+        };
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("LRC", &["lrc"])
+            .set_file_name("lyrics.lrc")
+            .save_file()
+        {
+            match std::fs::write(&path, lrc) {
+                Ok(()) => self.status = format!("Exported {}", path.display()),
+                Err(e) => self.error_popup = Some(e.to_string()),
+            }
         }
     }
 
@@ -465,6 +549,7 @@ impl SongLightsGui {
                 fav = true;
             }
         });
+        let f11 = ctx.input(|i| i.key_pressed(Key::F11));
         // Don't steal Space from text edits
         let focus_text = ctx.memory(|m| m.focused().is_some());
         if space && !focus_text {
@@ -508,6 +593,9 @@ impl SongLightsGui {
         if open {
             self.open_lyrics_file();
         }
+        if f11 {
+            self.fullscreen_karaoke = !self.fullscreen_karaoke;
+        }
     }
 
     fn open_lyrics_file(&mut self) {
@@ -545,11 +633,29 @@ impl eframe::App for SongLightsGui {
         self.poll_load();
         self.handle_shortcuts(ctx);
 
-        // Auto-next when track ends
+        // Sleep timer
+        if let Some(until) = self.sleep_until {
+            if Instant::now() >= until {
+                self.sleep_until = None;
+                self.stop_show();
+                self.status = "Sleep timer — stopped".into();
+            } else {
+                ctx.request_repaint_after(Duration::from_secs(1));
+            }
+        }
+
+        // Auto-next / repeat-all when track ends
         if let Some(show) = &self.show {
             if show.has_ended() && !self.was_ended {
                 self.was_ended = true;
-                if self.auto_next && self.queue.can_next() {
+                let can_advance = self.auto_next
+                    || self.repeat == RepeatMode::All
+                    || self.shuffle;
+                if can_advance
+                    && (self.queue.can_next()
+                        || self.repeat == RepeatMode::All
+                        || self.shuffle)
+                {
                     self.status = "Track ended — next…".into();
                     self.next_song();
                 } else {
@@ -561,6 +667,8 @@ impl eframe::App for SongLightsGui {
         if let Some(show) = &self.show {
             show.set_offset(self.offset as f64);
             show.set_volume(self.volume);
+            show.set_theme(self.theme);
+            show.set_brightness(self.brightness);
             let pos = show.position_s();
             let dur = self.duration_s.max(show.duration_s());
             if !self.scrubbing && dur > 0.0 {
@@ -572,6 +680,15 @@ impl eframe::App for SongLightsGui {
                 ctx.request_repaint_after(std::time::Duration::from_millis(40));
             }
         }
+
+        // Viewport: always on top / mini
+        ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
+            if self.always_on_top {
+                egui::WindowLevel::AlwaysOnTop
+            } else {
+                egui::WindowLevel::Normal
+            },
+        ));
 
         if let Some(err) = self.error_popup.clone() {
             egui::Window::new("Error")
@@ -651,25 +768,68 @@ impl eframe::App for SongLightsGui {
                 });
         }
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.heading(RichText::new("RAZER SONG LIGHTS").color(ACCENT).strong());
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .checkbox(&mut self.show_history, "Library panel")
-                        .changed()
-                    {
-                        self.persist_settings();
+        // Fullscreen karaoke overlay
+        if self.fullscreen_karaoke {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(ui.available_height() * 0.25);
+                    ui.label(RichText::new(&self.song_label).color(DIM).size(14.0));
+                    ui.add_space(20.0);
+                    if self.active_line >= 0 {
+                        if let Some(ln) = self.timed_lines.get(self.active_line as usize) {
+                            ui.label(
+                                RichText::new(&ln.text)
+                                    .color(ACCENT)
+                                    .size(36.0)
+                                    .strong(),
+                            );
+                        }
+                    } else {
+                        ui.label(RichText::new("…").color(DIM).size(28.0));
                     }
+                    if let Some(next) = self
+                        .timed_lines
+                        .get((self.active_line + 1) as usize)
+                    {
+                        ui.add_space(16.0);
+                        ui.label(RichText::new(&next.text).color(DIM).size(20.0));
+                    }
+                    ui.add_space(40.0);
+                    ui.label(RichText::new("F11 to exit fullscreen karaoke").color(DIM).small());
                 });
             });
-            ui.label(
-                RichText::new("Space=pause  ←/→=seek  M=mute  Ctrl+F=favorite  Ctrl+O=file")
+            return;
+        }
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            if !self.mini_player {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.heading(RichText::new("RAZER SONG LIGHTS").color(ACCENT).strong());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.checkbox(&mut self.always_on_top, "On top").changed() {
+                            self.persist_settings();
+                        }
+                        if ui.checkbox(&mut self.mini_player, "Mini").changed() {
+                            self.persist_settings();
+                        }
+                        if ui
+                            .checkbox(&mut self.show_history, "Library")
+                            .changed()
+                        {
+                            self.persist_settings();
+                        }
+                    });
+                });
+                ui.label(
+                    RichText::new(
+                        "Space=pause  ←/→=seek  M=mute  Ctrl+F=★  Ctrl+O=file  F11=karaoke",
+                    )
                     .color(DIM)
                     .size(12.0),
-            );
-            ui.add_space(8.0);
+                );
+                ui.add_space(8.0);
+            }
 
             // Search
             egui::Frame::none()
@@ -696,37 +856,63 @@ impl eframe::App for SongLightsGui {
                             self.load_youtube();
                         }
                     });
-                    ui.horizontal_wrapped(|ui| {
-                        ui.checkbox(&mut self.play_audio, "Audio");
-                        ui.checkbox(&mut self.clock_sync, "Sync");
-                        ui.checkbox(&mut self.cache_music, "Cache");
-                        ui.checkbox(&mut self.lights, "Lights");
-                        ui.checkbox(&mut self.loop_play, "Loop");
-                        ui.checkbox(&mut self.auto_next, "Auto-next");
-                        ui.label(RichText::new("Vol").color(DIM));
-                        if ui
-                            .add(egui::Slider::new(&mut self.volume, 0.0..=1.0).show_value(false))
-                            .changed()
-                        {
-                            if let Some(s) = &self.show {
-                                s.set_volume(self.volume);
+                    if !self.mini_player {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.checkbox(&mut self.play_audio, "Audio");
+                            ui.checkbox(&mut self.clock_sync, "Sync");
+                            ui.checkbox(&mut self.cache_music, "Cache");
+                            ui.checkbox(&mut self.lights, "Lights");
+                            ui.checkbox(&mut self.auto_next, "Auto-next");
+                            ui.checkbox(&mut self.shuffle, "Shuffle");
+                            if ui
+                                .button(format!("Repeat: {}", self.repeat.label()))
+                                .clicked()
+                            {
+                                self.repeat = self.repeat.cycle();
+                                self.loop_play = self.repeat == RepeatMode::One;
+                                self.persist_settings();
                             }
-                        }
-                        ui.label(format!("{:.0}%", self.volume * 100.0));
-                        ui.label(RichText::new("Speed").color(DIM));
-                        if ui
-                            .add(
-                                egui::Slider::new(&mut self.speed, 0.5..=1.5)
-                                    .fixed_decimals(2)
-                                    .show_value(true),
-                            )
-                            .changed()
-                        {
-                            if let Some(s) = &self.show {
-                                let _ = s.set_speed(self.speed);
+                            ui.label(RichText::new("Vol").color(DIM));
+                            if ui
+                                .add(
+                                    egui::Slider::new(&mut self.volume, 0.0..=1.0)
+                                        .show_value(false),
+                                )
+                                .changed()
+                            {
+                                if let Some(s) = &self.show {
+                                    s.set_volume(self.volume);
+                                }
                             }
+                            ui.label(format!("{:.0}%", self.volume * 100.0));
+                            ui.label(RichText::new("Speed").color(DIM));
+                            if ui
+                                .add(
+                                    egui::Slider::new(&mut self.speed, 0.5..=1.5)
+                                        .fixed_decimals(2),
+                                )
+                                .changed()
+                            {
+                                if let Some(s) = &self.show {
+                                    let _ = s.set_speed(self.speed);
+                                }
+                            }
+                        });
+                        if !self.recent_urls.is_empty() {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new("Recent").color(DIM).small());
+                                egui::ComboBox::from_id_salt("recent_urls")
+                                    .selected_text("Pick…")
+                                    .show_ui(ui, |ui| {
+                                        for u in self.recent_urls.clone() {
+                                            if ui.selectable_label(false, &u).clicked() {
+                                                self.url = u;
+                                            }
+                                        }
+                                    });
+                            });
                         }
-                    });
+                    }
                     if self.busy {
                         ui.horizontal(|ui| {
                             ui.spinner();
@@ -884,86 +1070,210 @@ impl eframe::App for SongLightsGui {
                                 }
                             }
                         }
-                    });
-                });
-
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("LYRICS").color(ACCENT).strong());
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.lyric_filter)
-                        .hint_text("Filter…")
-                        .desired_width(160.0),
-                );
-            });
-
-            egui::Frame::none()
-                .fill(Color32::from_rgb(0x0f, 0x0f, 0x13))
-                .inner_margin(8.0)
-                .show(ui, |ui| {
-                    let h = (ui.available_height() - 100.0).max(160.0);
-                    ScrollArea::vertical().max_height(h).show(ui, |ui| {
-                        if !self.timed_lines.is_empty() && self.show.is_some() {
-                            let filter = self.lyric_filter.to_lowercase();
-                            for (i, ln) in self.timed_lines.iter().enumerate() {
-                                if !filter.is_empty()
-                                    && !ln.text.to_lowercase().contains(&filter)
-                                {
-                                    continue;
-                                }
-                                let (color, size, strong) = if i as isize == self.active_line {
-                                    (ACCENT, 17.0, true)
-                                } else if (i as isize) < self.active_line {
-                                    (PAST, 13.0, false)
-                                } else {
-                                    (DIM, 14.0, false)
-                                };
-                                let mut rt = RichText::new(&ln.text).color(color).size(size);
-                                if strong {
-                                    rt = rt.strong();
-                                }
-                                let resp = ui.label(rt);
-                                if i as isize == self.active_line {
-                                    resp.scroll_to_me(Some(egui::Align::Center));
-                                }
-                            }
-                        } else {
-                            ui.add(
-                                egui::TextEdit::multiline(&mut self.lyrics_edit)
-                                    .desired_width(f32::INFINITY)
-                                    .desired_rows(10),
-                            );
+                        if ui.small_button("Export LRC").clicked() {
+                            self.export_lrc();
+                        }
+                        if ui.small_button("F11 Karaoke").clicked() {
+                            self.fullscreen_karaoke = true;
                         }
                     });
                 });
 
-            ui.add_space(6.0);
-            egui::Frame::none()
-                .fill(PANEL)
-                .inner_margin(10.0)
-                .show(ui, |ui| {
-                    ui.columns(2, |cols| {
-                        cols[0].horizontal(|ui| {
-                            ui.label(RichText::new("Offset").color(DIM));
-                            ui.add(egui::Slider::new(&mut self.offset, -10.0..=20.0).suffix("s"));
-                            if ui.small_button("−1").clicked() {
-                                self.offset = (self.offset - 1.0).clamp(-10.0, 20.0);
-                            }
-                            if ui.small_button("+1").clicked() {
-                                self.offset = (self.offset + 1.0).clamp(-10.0, 20.0);
+            if !self.mini_player {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("LYRICS").color(ACCENT).strong());
+                    ui.label(RichText::new("click a line to seek").color(DIM).small());
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.lyric_filter)
+                            .hint_text("Filter…")
+                            .desired_width(140.0),
+                    );
+                });
+
+                egui::Frame::none()
+                    .fill(Color32::from_rgb(0x0f, 0x0f, 0x13))
+                    .inner_margin(8.0)
+                    .show(ui, |ui| {
+                        let h = (ui.available_height() - 130.0).max(140.0);
+                        let mut seek_t: Option<f64> = None;
+                        ScrollArea::vertical().max_height(h).show(ui, |ui| {
+                            if !self.timed_lines.is_empty() && self.show.is_some() {
+                                let filter = self.lyric_filter.to_lowercase();
+                                for (i, ln) in self.timed_lines.iter().enumerate() {
+                                    if !filter.is_empty()
+                                        && !ln.text.to_lowercase().contains(&filter)
+                                    {
+                                        continue;
+                                    }
+                                    let (color, size, strong) =
+                                        if i as isize == self.active_line {
+                                            (ACCENT, 17.0, true)
+                                        } else if (i as isize) < self.active_line {
+                                            (PAST, 13.0, false)
+                                        } else {
+                                            (DIM, 14.0, false)
+                                        };
+                                    let mut rt =
+                                        RichText::new(format!("  {}", ln.text)).color(color).size(size);
+                                    if strong {
+                                        rt = rt.strong();
+                                    }
+                                    let resp = ui.add(
+                                        egui::Label::new(rt).sense(Sense::click()),
+                                    );
+                                    if resp.clicked() {
+                                        seek_t = Some(ln.t);
+                                    }
+                                    if i as isize == self.active_line {
+                                        resp.scroll_to_me(Some(egui::Align::Center));
+                                    }
+                                }
+                            } else {
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut self.lyrics_edit)
+                                        .desired_width(f32::INFINITY)
+                                        .desired_rows(8),
+                                );
                             }
                         });
-                        cols[1].horizontal(|ui| {
-                            ui.label(RichText::new("Mode").color(DIM));
-                            ui.selectable_value(&mut self.mode, PlayMode::FlashWord, "Word");
-                            ui.selectable_value(&mut self.mode, PlayMode::FlashLine, "Line");
-                            if ui.small_button("Save prefs").clicked() {
-                                self.persist_settings();
-                                self.status = "Settings saved".into();
+                        if let Some(t) = seek_t {
+                            if let Some(show) = &self.show {
+                                let _ = show.seek((t + self.offset as f64).max(0.0));
+                                self.status =
+                                    format!("Jumped to lyric @ {}", Self::fmt_time(t));
                             }
+                        }
+                    });
+
+                ui.add_space(6.0);
+                egui::Frame::none()
+                    .fill(PANEL)
+                    .inner_margin(10.0)
+                    .show(ui, |ui| {
+                        ui.columns(2, |cols| {
+                            cols[0].vertical(|ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new("Offset").color(DIM));
+                                    ui.add(
+                                        egui::Slider::new(&mut self.offset, -10.0..=20.0)
+                                            .suffix("s"),
+                                    );
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new("Bright").color(DIM));
+                                    if ui
+                                        .add(
+                                            egui::Slider::new(&mut self.brightness, 0.1..=1.0)
+                                                .show_value(false),
+                                        )
+                                        .changed()
+                                    {
+                                        if let Some(s) = &self.show {
+                                            s.set_brightness(self.brightness);
+                                        }
+                                    }
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new("Theme").color(DIM));
+                                    egui::ComboBox::from_id_salt("theme")
+                                        .selected_text(self.theme.label())
+                                        .show_ui(ui, |ui| {
+                                            for th in LightTheme::ALL {
+                                                if ui
+                                                    .selectable_value(
+                                                        &mut self.theme,
+                                                        th,
+                                                        th.label(),
+                                                    )
+                                                    .changed()
+                                                {
+                                                    if let Some(s) = &self.show {
+                                                        s.set_theme(th);
+                                                    }
+                                                }
+                                            }
+                                        });
+                                });
+                            });
+                            cols[1].vertical(|ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new("Mode").color(DIM));
+                                    ui.selectable_value(
+                                        &mut self.mode,
+                                        PlayMode::FlashWord,
+                                        "Word",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.mode,
+                                        PlayMode::FlashLine,
+                                        "Line",
+                                    );
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new("Sleep").color(DIM));
+                                    if ui.small_button("15m").clicked() {
+                                        self.sleep_until =
+                                            Some(Instant::now() + Duration::from_secs(15 * 60));
+                                        self.status = "Sleep timer: 15 min".into();
+                                    }
+                                    if ui.small_button("30m").clicked() {
+                                        self.sleep_until =
+                                            Some(Instant::now() + Duration::from_secs(30 * 60));
+                                        self.status = "Sleep timer: 30 min".into();
+                                    }
+                                    if ui.small_button("60m").clicked() {
+                                        self.sleep_until =
+                                            Some(Instant::now() + Duration::from_secs(60 * 60));
+                                        self.status = "Sleep timer: 60 min".into();
+                                    }
+                                    if ui.small_button("Off").clicked() {
+                                        self.sleep_until = None;
+                                        self.status = "Sleep timer off".into();
+                                    }
+                                    if let Some(until) = self.sleep_until {
+                                        let left = until
+                                            .saturating_duration_since(Instant::now())
+                                            .as_secs();
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "{:02}:{:02}",
+                                                left / 60,
+                                                left % 60
+                                            ))
+                                            .color(ACCENT)
+                                            .small(),
+                                        );
+                                    }
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new(&self.cache_label).color(DIM).small(),
+                                    );
+                                    if ui.small_button("Clear cache").clicked() {
+                                        let root = default_cache_root();
+                                        match clear_media_cache(&root) {
+                                            Ok((b, _)) => {
+                                                self.refresh_cache_label();
+                                                self.status = format!(
+                                                    "Cleared cache ({})",
+                                                    format_bytes(b)
+                                                );
+                                            }
+                                            Err(e) => {
+                                                self.error_popup = Some(e.to_string())
+                                            }
+                                        }
+                                    }
+                                    if ui.small_button("Save prefs").clicked() {
+                                        self.persist_settings();
+                                        self.status = "Settings saved".into();
+                                    }
+                                });
+                            });
                         });
                     });
-                });
+            }
         });
     }
 

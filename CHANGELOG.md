@@ -1,28 +1,25 @@
 # Changelog
 
-## [0.4.0] — 2026-07-12
+## [0.5.0] — 2026-07-12
 
 ### Features
-- Pause / Resume, Mute, playback **speed** (0.5–1.5×)
-- **Auto-next** when a track ends
-- **Favorites** + Library side panel (history + stars)
-- **Keyboard shortcuts** (Space, arrows, M, Ctrl+F, Ctrl+O)
-- **Settings persistence** (volume, offset, mode, toggles)
-- Lyric **filter** + copy current line
-- Save prefs button
-
-### Optimizations
-- Binary search for active LRC line/word (`O(log n)`)
-- Adaptive sleep in light engine (lower idle CPU)
-- Atomic sync offset on hot path
-- Pause freezes song clock correctly; speed scales position
-- Engine ends cleanly for auto-next
+- **8 light themes** + live **brightness** (applies mid-song)
+- **Repeat** Off / One / All + **Shuffle** next
+- **Click lyric line to seek** to that timestamp
+- **F11 fullscreen karaoke** mode
+- **Mini player** + **always on top**
+- **Sleep timer** 15 / 30 / 60 min
+- **Recent URLs** dropdown
+- **Export LRC** file
+- **Cache size** display + **Clear cache**
+- Repeat-one uses engine loop; auto-next respects shuffle/repeat-all
 
 ### Tests
-- 35 offline unit/integration tests
+- 38 offline unit/integration tests
 
 ---
 
-## [0.3.0] — GUI + full parity
+## [0.4.0] — pause/mute/speed, favorites, shortcuts, optimizations
+## [0.3.0] — full GUI
 ## [0.2.0] — CLI play pipeline
-## [0.1.0] — Core library
+## [0.1.0] — core library
